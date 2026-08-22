@@ -23,6 +23,34 @@ document.addEventListener("DOMContentLoaded", () => {
     button.addEventListener("click", () => button.closest("dialog")?.close("cancel"));
   });
 
+  document.querySelectorAll(".delete-category").forEach((button) => {
+    button.addEventListener("click", () => {
+      const dialog = document.querySelector("#delete-category-dialog");
+      const form = dialog.querySelector("form");
+      const level = button.dataset.level;
+      const type = button.dataset.type;
+      const parent = button.dataset.parent;
+      const subcategory = button.dataset.subcategory;
+      form.elements.level.value = level;
+      form.elements.transaction_type.value = type;
+      form.elements.parent.value = parent;
+      form.elements.subcategory.value = subcategory;
+      const names = [type, parent, subcategory].filter(Boolean);
+      dialog.querySelector("#delete-category-name").textContent = names.join(" → ");
+      const replacement = form.elements.replacement_id;
+      replacement.value = "";
+      [...replacement.options].forEach((option) => {
+        if (!option.value) return;
+        const inScope = option.dataset.type === type
+          && (level === "type" || option.dataset.parent === parent)
+          && (level !== "subcategory" || option.dataset.subcategory === subcategory);
+        option.disabled = inScope;
+        option.hidden = inScope;
+      });
+      dialog.showModal();
+    });
+  });
+
   function fillSelect(select, values, placeholder, selected) {
     select.innerHTML = `<option value="">${placeholder}</option>`;
     values.forEach((value) => {

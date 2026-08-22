@@ -22,11 +22,13 @@ from flask import (
 )
 from sqlalchemy import asc, desc, func, or_
 
-from .categories import CATEGORY_TREE
+from .categories import REPORTING_GROUPS
 from .models import (
     AuditRecord,
     BalanceCheckpoint,
     BudgetItem,
+    Category,
+    CategoryProfile,
     ImportBatch,
     MonthRecord,
     RecurringTemplate,
@@ -39,6 +41,7 @@ from .services import (
     add_months,
     budget_type_totals,
     budget_totals,
+    category_tree,
     current_balance,
     due_date_for,
     duplicate_exists,
@@ -51,6 +54,7 @@ from .services import (
 
 bp = Blueprint("main", __name__)
 VALID_INTERVALS = {1, 3, 6, 12}
+CATEGORIZED_MODELS = (Transaction, TransactionSplit, RecurringTemplate, BudgetItem)
 
 
 def parse_month(value):
@@ -92,6 +96,33 @@ def transaction_location(transaction_id):
     return f"{page}#transaction-{transaction_id}"
 
 
+def category_scope(level, transaction_type, parent=None, subcategory=None):
+    query = Category.query.filter_by(transaction_type=transaction_type)
+    if level in {"parent", "subcategory"}:
+        query = query.filter_by(parent=parent)
+    if level == "subcategory":
+        query = query.filter_by(subcategory=subcategory)
+    return query
+
+
+def category_usage_scope(model, level, transaction_type, parent=None, subcategory=None):
+    query = model.query.filter(model.transaction_type == transaction_type)
+    if level in {"parent", "subcategory"}:
+        query = query.filter(model.parent_category == parent)
+    if level == "subcategory":
+        query = query.filter(model.subcategory == subcategory)
+    return query
+
+
+def category_name(value, label, maximum):
+    value = (value or "").strip()
+    if not value:
+        raise ValueError(f"{label} is required.")
+    if len(value) > maximum:
+        raise ValueError(f"{label} must be {maximum} characters or fewer.")
+    return value
+
+
 @bp.before_app_request
 def maintain_months():
     ensure_current_month()
@@ -111,7 +142,7 @@ def date_us(value):
 
 @bp.app_context_processor
 def shared_template_data():
-    return {"category_tree": CATEGORY_TREE, "today": date.today(), "today_month": month_start()}
+    return {"category_tree": category_tree(), "today": date.today(), "today_month": month_start()}
 
 
 @bp.route("/")
@@ -676,6 +707,169 @@ def admin():
         current_balance=current_balance(),
         needs_initial_balance=not bool(checkpoints),
     )
+
+
+@bp.get("/admin/categories")
+def manage_categories():
+    categories = Category.query.order_by(
+        Category.transaction_type, Category.parent, Category.subcategory
+    ).all()
+    grouped = {}
+    for category in categories:
+        grouped.setdefault(category.transaction_type, {}).setdefault(category.parent, []).append(
+            category
+        )
+    return render_template(
+        "categories.html",
+        grouped_categories=grouped,
+        categories=categories,
+        reporting_groups=REPORTING_GROUPS,
+    )
+
+
+@bp.post("/admin/categories/add")
+def add_category():
+    try:
+        transaction_type = category_name(request.form.get("transaction_type"), "Type", 40)
+        parent = category_name(request.form.get("parent"), "Parent", 80)
+        subcategory = category_name(request.form.get("subcategory"), "Subcategory", 80)
+        reporting_group = request.form.get("reporting_group")
+        if reporting_group not in REPORTING_GROUPS:
+            raise ValueError("Reporting group is invalid.")
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("main.manage_categories"))
+    exists = Category.query.filter(
+        func.lower(Category.transaction_type) == transaction_type.casefold(),
+        func.lower(Category.parent) == parent.casefold(),
+        func.lower(Category.subcategory) == subcategory.casefold(),
+    ).first()
+    if exists:
+        flash("That category already exists.", "error")
+        return redirect(url_for("main.manage_categories"))
+    category = Category(
+        transaction_type=transaction_type,
+        parent=parent,
+        subcategory=subcategory,
+    )
+    category.profile = CategoryProfile(reporting_group=reporting_group)
+    db.session.add(category)
+    db.session.commit()
+    flash("Category added.", "success")
+    return redirect(url_for("main.manage_categories"))
+
+
+@bp.post("/admin/categories/rename")
+def rename_category():
+    level = request.form.get("level")
+    if level not in {"type", "parent", "subcategory"}:
+        abort(400)
+    transaction_type = request.form.get("transaction_type", "")
+    parent = request.form.get("parent", "")
+    subcategory = request.form.get("subcategory", "")
+    maximum = 40 if level == "type" else 80
+    try:
+        new_name = category_name(request.form.get("new_name"), level.title(), maximum)
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("main.manage_categories"))
+    source = category_scope(level, transaction_type, parent, subcategory).all()
+    if not source:
+        abort(404)
+    if level == "type":
+        collision = any(
+            category.transaction_type.casefold() == new_name.casefold()
+            and category.transaction_type.casefold() != transaction_type.casefold()
+            for category in Category.query.all()
+        )
+    elif level == "parent":
+        collision = any(
+            category.transaction_type == transaction_type
+            and category.parent.casefold() == new_name.casefold()
+            and category.parent.casefold() != parent.casefold()
+            for category in Category.query.all()
+        )
+    else:
+        collision = any(
+            category.transaction_type == transaction_type
+            and category.parent == parent
+            and category.subcategory.casefold() == new_name.casefold()
+            and category.subcategory.casefold() != subcategory.casefold()
+            for category in Category.query.all()
+        )
+    if collision:
+        flash(f"A {level} with that name already exists in this group.", "error")
+        return redirect(url_for("main.manage_categories"))
+    for model in CATEGORIZED_MODELS:
+        usage = category_usage_scope(model, level, transaction_type, parent, subcategory)
+        column = {
+            "type": model.transaction_type,
+            "parent": model.parent_category,
+            "subcategory": model.subcategory,
+        }[level]
+        usage.update({column: new_name}, synchronize_session=False)
+    for category in source:
+        setattr(
+            category,
+            {"type": "transaction_type", "parent": "parent", "subcategory": "subcategory"}[
+                level
+            ],
+            new_name,
+        )
+    db.session.commit()
+    flash(f"{level.title()} renamed everywhere it is used.", "success")
+    return redirect(url_for("main.manage_categories"))
+
+
+@bp.post("/admin/categories/reporting-group")
+def update_reporting_group():
+    category = db.get_or_404(Category, request.form.get("category_id", type=int))
+    reporting_group = request.form.get("reporting_group")
+    if reporting_group not in REPORTING_GROUPS:
+        abort(400)
+    category.profile.reporting_group = reporting_group
+    db.session.commit()
+    flash("Reporting group updated.", "success")
+    return redirect(url_for("main.manage_categories"))
+
+
+@bp.post("/admin/categories/delete")
+def delete_category():
+    level = request.form.get("level")
+    if level not in {"type", "parent", "subcategory"}:
+        abort(400)
+    transaction_type = request.form.get("transaction_type", "")
+    parent = request.form.get("parent", "")
+    subcategory = request.form.get("subcategory", "")
+    source = category_scope(level, transaction_type, parent, subcategory).all()
+    if not source:
+        abort(404)
+    replacement = db.get_or_404(Category, request.form.get("replacement_id", type=int))
+    if replacement.id in {category.id for category in source}:
+        flash("Choose a replacement outside the category being deleted.", "error")
+        return redirect(url_for("main.manage_categories"))
+    updated = 0
+    values = {
+        "transaction_type": replacement.transaction_type,
+        "parent_category": replacement.parent,
+        "subcategory": replacement.subcategory,
+    }
+    for model in CATEGORIZED_MODELS:
+        updated += category_usage_scope(
+            model, level, transaction_type, parent, subcategory
+        ).update(
+            {
+                model.transaction_type: values["transaction_type"],
+                model.parent_category: values["parent_category"],
+                model.subcategory: values["subcategory"],
+            },
+            synchronize_session=False,
+        )
+    for category in source:
+        db.session.delete(category)
+    db.session.commit()
+    flash(f"Category deleted; reassigned {updated} existing record(s).", "success")
+    return redirect(url_for("main.manage_categories"))
 
 
 @bp.post("/admin/import/preview")

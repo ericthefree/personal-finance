@@ -18,6 +18,9 @@
   </article>
 </section>
 <section class="panel">
+  <div class="panel-heading"><div><p class="eyebrow">Organization</p><h2>Categories</h2><p>Manage category types, parents, subcategories, and reporting behavior.</p></div><a class="button" href="{{ url_for('main.manage_categories') }}">Manage categories</a></div>
+</section>
+<section class="panel">
   <div class="panel-heading"><div><p class="eyebrow">Portability</p><h2>Backup and exports</h2></div></div>
   <div class="download-grid"><a class="download-card" href="{{ url_for('main.backup_database') }}"><strong>SQLite backup</strong><span>Complete restorable database</span></a><a class="download-card" href="{{ url_for('main.export_transactions') }}"><strong>Transactions CSV</strong><span>Active transaction data</span></a><a class="download-card" href="{{ url_for('main.export_budget') }}"><strong>Budgets CSV</strong><span>Monthly budget history</span></a></div>
 </section>

@@ -17,6 +17,18 @@ class Category(db.Model):
         UniqueConstraint("transaction_type", "parent", "subcategory"),
     )
 
+    profile = db.relationship(
+        "CategoryProfile", cascade="all, delete-orphan", back_populates="category", uselist=False
+    )
+
+
+class CategoryProfile(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    category_id = db.Column(db.Integer, db.ForeignKey("category.id"), unique=True, nullable=False)
+    reporting_group = db.Column(db.String(20), nullable=False)
+
+    category = db.relationship("Category", back_populates="profile")
+
 
 class ImportBatch(db.Model):
     id = db.Column(db.Integer, primary_key=True)

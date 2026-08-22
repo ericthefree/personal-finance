@@ -19,7 +19,7 @@
       <a href="{{ url_for('main.summary') }}" class="{{ 'active' if request.endpoint == 'main.summary' }}">Summary</a>
       <a href="{{ url_for('main.transactions') }}" class="{{ 'active' if request.endpoint == 'main.transactions' }}">Transactions</a>
       <a href="{{ url_for('main.budget') }}" class="{{ 'active' if request.endpoint == 'main.budget' }}">Budget</a>
-      <a href="{{ url_for('main.admin') }}" class="{{ 'active' if request.endpoint in ['main.admin', 'main.import_preview'] }}">Admin</a>
+      <a href="{{ url_for('main.admin') }}" class="{{ 'active' if request.endpoint in ['main.admin', 'main.import_preview', 'main.manage_categories'] }}">Admin</a>
     </nav>
   </header>
   <main class="page-shell">

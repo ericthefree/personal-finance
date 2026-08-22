@@ -6,12 +6,14 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import func
+from sqlalchemy.orm import joinedload
 
-from .categories import CATEGORY_TREE
+from .categories import CATEGORY_TREE, default_reporting_group
 from .models import (
     BalanceCheckpoint,
     BudgetItem,
     Category,
+    CategoryProfile,
     MonthRecord,
     RecurringTemplate,
     Transaction,
@@ -34,19 +36,71 @@ def due_date_for(month, day):
 
 
 def seed_categories():
-    if Category.query.first():
-        return
-    for transaction_type, parents in CATEGORY_TREE.items():
-        for parent, subcategories in parents.items():
-            for subcategory in subcategories:
-                db.session.add(
-                    Category(
-                        transaction_type=transaction_type,
-                        parent=parent,
-                        subcategory=subcategory,
+    if not Category.query.first():
+        for transaction_type, parents in CATEGORY_TREE.items():
+            for parent, subcategories in parents.items():
+                for subcategory in subcategories:
+                    db.session.add(
+                        Category(
+                            transaction_type=transaction_type,
+                            parent=parent,
+                            subcategory=subcategory,
+                        )
                     )
+        db.session.flush()
+    profiled_ids = {
+        category_id for (category_id,) in db.session.query(CategoryProfile.category_id).all()
+    }
+    for category in Category.query.all():
+        if category.id not in profiled_ids:
+            db.session.add(
+                CategoryProfile(
+                    category=category,
+                    reporting_group=default_reporting_group(
+                        category.transaction_type, category.parent
+                    ),
                 )
+            )
     db.session.commit()
+
+
+def category_tree():
+    tree = {}
+    for category in Category.query.order_by(
+        Category.transaction_type, Category.parent, Category.subcategory
+    ):
+        tree.setdefault(category.transaction_type, {}).setdefault(category.parent, []).append(
+            category.subcategory
+        )
+    return tree
+
+
+def reporting_group_maps():
+    exact = {}
+    parents = {}
+    types = {}
+    for category in Category.query.options(joinedload(Category.profile)).all():
+        group = category.profile.reporting_group if category.profile else "other"
+        exact[(category.transaction_type, category.parent, category.subcategory)] = group
+        parent_key = (category.transaction_type, category.parent)
+        parents[parent_key] = group if parent_key not in parents else (
+            group if parents[parent_key] == group else None
+        )
+        type_key = category.transaction_type
+        types[type_key] = group if type_key not in types else (
+            group if types[type_key] == group else None
+        )
+    return exact, parents, types
+
+
+def reporting_group_for(entry, maps):
+    exact, parents, types = maps
+    return (
+        exact.get((entry.transaction_type, entry.parent_category, entry.subcategory))
+        or parents.get((entry.transaction_type, entry.parent_category))
+        or types.get(entry.transaction_type)
+        or "other"
+    )
 
 
 def current_balance():
@@ -124,11 +178,12 @@ def monthly_activity(month=None):
     )
     income = Decimal("0")
     expenses = Decimal("0")
+    group_maps = reporting_group_maps()
     for transaction in transactions:
         entries = transaction.splits or [transaction]
         for entry in entries:
             amount = Decimal(entry.amount)
-            if entry.transaction_type == "Transfers":
+            if reporting_group_for(entry, group_maps) == "transfer":
                 continue
             if amount < 0:
                 expenses += abs(amount)
@@ -230,21 +285,23 @@ def budget_totals(month):
 
 def budget_type_totals(month):
     items = BudgetItem.query.filter_by(month=month).filter(BudgetItem.deleted_at.is_(None)).all()
+    group_maps = reporting_group_maps()
 
-    def total_for(predicate):
-        return sum((abs(Decimal(item.amount)) for item in items if predicate(item)), Decimal("0"))
+    def total_for(group):
+        return sum(
+            (
+                abs(Decimal(item.amount))
+                for item in items
+                if reporting_group_for(item, group_maps) == group
+            ),
+            Decimal("0"),
+        )
 
     return {
-        "income": total_for(lambda item: item.transaction_type == "Income"),
-        "expenses": total_for(lambda item: item.transaction_type == "Expenses"),
-        "bills": total_for(lambda item: item.transaction_type == "Bills"),
-        "loans": total_for(
-            lambda item: item.transaction_type == "Debts"
-            and item.parent_category in {"Loans", "Mortgage"}
-        ),
-        "credit_cards": total_for(
-            lambda item: item.transaction_type == "Debts"
-            and item.parent_category == "Credit Cards"
-        ),
+        "income": total_for("income"),
+        "expenses": total_for("expense"),
+        "bills": total_for("bill"),
+        "loans": total_for("loan"),
+        "credit_cards": total_for("credit_card"),
         "difference": budget_totals(month)["difference"],
     }

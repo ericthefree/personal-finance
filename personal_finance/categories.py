@@ -35,3 +35,30 @@ CATEGORY_TREE = {
         "External": ["To Other Person", "From Other Person"],
     },
 }
+
+
+REPORTING_GROUPS = {
+    "income": "Income",
+    "expense": "Expense",
+    "bill": "Bill",
+    "loan": "Loan",
+    "credit_card": "Credit card",
+    "transfer": "Transfer / excluded",
+    "other": "Other",
+}
+
+
+def default_reporting_group(transaction_type, parent):
+    if transaction_type == "Income":
+        return "income"
+    if transaction_type == "Bills":
+        return "bill"
+    if transaction_type == "Expenses":
+        return "expense"
+    if transaction_type == "Debts" and parent == "Credit Cards":
+        return "credit_card"
+    if transaction_type == "Debts" and parent in {"Loans", "Mortgage"}:
+        return "loan"
+    if transaction_type == "Transfers":
+        return "transfer"
+    return "other"

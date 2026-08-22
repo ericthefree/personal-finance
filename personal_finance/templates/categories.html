@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Categories · Personal Finance{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <div><p class="eyebrow">Administration</p><h1>Category management</h1><p>Add complete category paths and safely rename or replace existing groups.</p></div>
+  <button class="button primary" type="button" data-open-dialog="add-category">+ Add category</button>
+</section>
+
+<div class="category-manager">
+  {% for type_name, parents in grouped_categories.items() %}
+  <section class="panel category-type-panel">
+    <div class="category-level-heading">
+      <form action="{{ url_for('main.rename_category') }}" method="post" class="category-rename-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="level" value="type"><input type="hidden" name="transaction_type" value="{{ type_name }}">
+        <label><span>Type</span><input name="new_name" value="{{ type_name }}" maxlength="40" required></label><button class="button">Rename</button>
+      </form>
+      <button class="icon-button danger delete-category" type="button" data-level="type" data-type="{{ type_name }}" data-parent="" data-subcategory="">Delete type</button>
+    </div>
+    {% for parent_name, subcategories in parents.items() %}
+    <div class="category-parent-group">
+      <div class="category-level-heading parent-heading">
+        <form action="{{ url_for('main.rename_category') }}" method="post" class="category-rename-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="level" value="parent"><input type="hidden" name="transaction_type" value="{{ type_name }}"><input type="hidden" name="parent" value="{{ parent_name }}">
+          <label><span>Parent</span><input name="new_name" value="{{ parent_name }}" maxlength="80" required></label><button class="button">Rename</button>
+        </form>
+        <button class="icon-button danger delete-category" type="button" data-level="parent" data-type="{{ type_name }}" data-parent="{{ parent_name }}" data-subcategory="">Delete parent</button>
+      </div>
+      <div class="subcategory-list">
+        {% for category in subcategories %}
+        <div class="subcategory-row">
+          <form action="{{ url_for('main.rename_category') }}" method="post" class="category-rename-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="level" value="subcategory"><input type="hidden" name="transaction_type" value="{{ type_name }}"><input type="hidden" name="parent" value="{{ parent_name }}"><input type="hidden" name="subcategory" value="{{ category.subcategory }}">
+            <label><span>Subcategory</span><input name="new_name" value="{{ category.subcategory }}" maxlength="80" required></label><button class="button">Rename</button>
+          </form>
+          <form action="{{ url_for('main.update_reporting_group') }}" method="post" class="reporting-group-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="category_id" value="{{ category.id }}">
+            <label><span>Reporting group</span><select name="reporting_group" onchange="this.form.submit()">{% for value, label in reporting_groups.items() %}<option value="{{ value }}" {{ 'selected' if category.profile.reporting_group == value }}>{{ label }}</option>{% endfor %}</select></label>
+          </form>
+          <button class="icon-button danger delete-category" type="button" data-level="subcategory" data-type="{{ type_name }}" data-parent="{{ parent_name }}" data-subcategory="{{ category.subcategory }}">Delete</button>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+  </section>
+  {% endfor %}
+</div>
+
+<dialog id="add-category">
+  <form action="{{ url_for('main.add_category') }}" method="post" class="dialog-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="dialog-heading"><h2>Add category</h2><button type="button" class="close-dialog" aria-label="Close">×</button></div>
+    <p class="muted">Enter a complete Type → Parent → Subcategory path. Existing names may be reused.</p>
+    <label>Type<input name="transaction_type" list="category-types" maxlength="40" required></label>
+    <label>Parent<input name="parent" list="category-parents" maxlength="80" required></label>
+    <label>Subcategory<input name="subcategory" maxlength="80" required></label>
+    <label>Reporting group<select name="reporting_group" required>{% for value, label in reporting_groups.items() %}<option value="{{ value }}">{{ label }}</option>{% endfor %}</select></label>
+    <datalist id="category-types">{% for type_name in grouped_categories %}<option value="{{ type_name }}">{% endfor %}</datalist>
+    <datalist id="category-parents">{% for parents in grouped_categories.values() %}{% for parent_name in parents %}<option value="{{ parent_name }}">{% endfor %}{% endfor %}</datalist>
+    <div class="dialog-actions"><button type="button" class="button close-dialog">Cancel</button><button class="button primary">Add category</button></div>
+  </form>
+</dialog>
+
+<dialog id="delete-category-dialog">
+  <form action="{{ url_for('main.delete_category') }}" method="post" class="dialog-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="level"><input type="hidden" name="transaction_type"><input type="hidden" name="parent"><input type="hidden" name="subcategory">
+    <div class="dialog-heading"><h2>Replace and delete category?</h2><button type="button" class="close-dialog" aria-label="Close">×</button></div>
+    <p>Every transaction, split, recurring template, and budget item using <strong id="delete-category-name"></strong> will be changed to the replacement below.</p>
+    <label>Replacement category<select name="replacement_id" required><option value="">Choose a replacement…</option>{% for category in categories %}<option value="{{ category.id }}" data-type="{{ category.transaction_type }}" data-parent="{{ category.parent }}" data-subcategory="{{ category.subcategory }}">{{ category.transaction_type }} → {{ category.parent }} → {{ category.subcategory }}</option>{% endfor %}</select></label>
+    <div class="dialog-actions"><button type="button" class="button close-dialog">Cancel</button><button class="button primary danger-action">Replace and delete</button></div>
+  </form>
+</dialog>
+{% endblock %}
