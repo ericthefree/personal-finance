@@ -30,8 +30,8 @@ confirming the first import. The balance is treated as already including every t
 initial file.
 
 The importer finds the header row containing `Date`, `Description`, and `Amount`, regardless of
-whether blank or account-information lines precede it. It ignores every other column. A typical
-file looks like:
+whether blank or account-information lines precede it. Dates may use two- or four-digit years. It
+ignores every other column. A typical file looks like:
 
 ```csv
 

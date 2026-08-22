@@ -166,7 +166,16 @@ def parse_csv_upload(raw):
         if not any((row.get(headers[name]) or "").strip() for name in required):
             continue
         try:
-            bank_date = datetime.strptime(row[headers["date"]].strip(), "%m/%d/%Y").date()
+            raw_date = row[headers["date"]].strip()
+            bank_date = None
+            for date_format in ("%m/%d/%Y", "%m/%d/%y"):
+                try:
+                    bank_date = datetime.strptime(raw_date, date_format).date()
+                    break
+                except ValueError:
+                    continue
+            if bank_date is None:
+                raise ValueError("date must use M/D/YY or M/D/YYYY")
             description = row[headers["description"]].strip()
             if not description:
                 raise ValueError("description is blank")

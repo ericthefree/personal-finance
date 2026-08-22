@@ -42,7 +42,7 @@ def test_csv_finds_header_after_preamble_and_normalizes_amounts():
 
 
 def test_csv_accepts_header_as_first_line():
-    raw = b"Date,Amount,Description\n8/21/2026,-2,Coffee\n"
+    raw = b"Date,Amount,Description\n8/21/26,-2,Coffee\n"
 
     rows = parse_csv_upload(raw)
 
