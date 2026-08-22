@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Admin · Personal Finance{% endblock %}
+{% block content %}
+<section class="page-heading"><div><p class="eyebrow">Data management</p><h1>Admin</h1><p>Import bank activity, reconcile your balance, and keep backups.</p></div></section>
+<section class="admin-grid">
+  <article class="panel feature-panel">
+    <div class="feature-icon">↑</div><div><p class="eyebrow">Transactions</p><h2>Upload bank CSV</h2><p>The first two lines are ignored. The complete file is validated before anything is imported.</p></div>
+    <form action="{{ url_for('main.import_preview') }}" method="post" enctype="multipart/form-data" class="stack-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label class="file-drop"><input type="file" name="csv_file" accept=".csv,text/csv" required><span>Choose a CSV file</span><small>Date, Description, and Amount are required</small></label>
+      <button class="button primary">Preview import</button>
+    </form>
+  </article>
+  <article class="panel feature-panel">
+    <div class="feature-icon">$</div><div><p class="eyebrow">Reconciliation</p><h2>{{ 'Initial balance' if needs_initial_balance else 'Current balance' }}</h2><p class="large-value">{{ current_balance|currency }}</p><p>A new checkpoint shows the difference from the calculated balance before replacing it.</p></div>
+    {% if needs_initial_balance %}<p class="callout">Your initial balance will be requested when you confirm the first import.</p>
+    {% else %}<form action="{{ url_for('main.reset_balance') }}" method="post" class="inline-form balance-form mobile-restricted" data-current="{{ current_balance }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label><span>Bank balance</span><input name="balance" inputmode="decimal" required></label><button class="button">Reconcile balance</button></form>{% endif %}
+  </article>
+</section>
+<section class="panel">
+  <div class="panel-heading"><div><p class="eyebrow">Portability</p><h2>Backup and exports</h2></div></div>
+  <div class="download-grid"><a class="download-card" href="{{ url_for('main.backup_database') }}"><strong>SQLite backup</strong><span>Complete restorable database</span></a><a class="download-card" href="{{ url_for('main.export_transactions') }}"><strong>Transactions CSV</strong><span>Active transaction data</span></a><a class="download-card" href="{{ url_for('main.export_budget') }}"><strong>Budgets CSV</strong><span>Monthly budget history</span></a></div>
+</section>
+<details class="panel history-details"><summary>Import and balance history</summary>
+  <div class="history-columns"><div><h3>Imports</h3>{% for batch in batches %}<p><strong>{{ batch.filename }}</strong><br><small>{{ batch.imported_at.strftime('%m-%d-%Y %I:%M %p') }} · {{ batch.imported_count }} imported · {{ batch.duplicate_count }} duplicates</small></p>{% else %}<p class="muted">No imports yet.</p>{% endfor %}</div><div><h3>Balance checkpoints</h3>{% for checkpoint in checkpoints %}<p><strong>{{ checkpoint.balance|currency }}</strong><br><small>{{ checkpoint.created_at.strftime('%m-%d-%Y %I:%M %p') }}{% if checkpoint.discrepancy is not none %} · Difference {{ checkpoint.discrepancy|currency }}{% endif %}</small></p>{% else %}<p class="muted">No checkpoints yet.</p>{% endfor %}</div></div>
+</details>
+{% endblock %}

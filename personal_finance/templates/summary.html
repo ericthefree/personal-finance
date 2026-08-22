@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">Financial overview</p>
+    <h1>{{ selected_month.strftime('%B %Y') }}</h1>
+  </div>
+  <form class="month-picker" method="get">
+    <label for="summary-month">View month</label>
+    <input id="summary-month" type="month" name="month" value="{{ selected_month.strftime('%Y-%m') }}" onchange="this.form.submit()">
+  </form>
+</section>
+
+<section class="metric-grid" aria-label="Monthly summary">
+  <article class="metric-card" tabindex="0" title="Debits excluding transfers, less linked reimbursements">
+    <span>Monthly spending</span><strong>{{ spending|currency }}</strong>
+    <small>Net of reimbursements</small>
+  </article>
+  <article class="metric-card" tabindex="0" title="The latest balance checkpoint plus subsequently imported transactions">
+    <span>Checking balance</span><strong>{{ balance|currency }}</strong>
+    <small>{{ 'Set an initial balance in Admin' if balance is none else 'Current calculated balance' }}</small>
+  </article>
+  <article class="metric-card accent" tabindex="0" title="Checking balance plus remaining credits and less remaining debits">
+    <span>Available after budget</span><strong>{{ available|currency }}</strong>
+    <small>After remaining budget items</small>
+  </article>
+  <article class="metric-card" tabindex="0" title="Budget items not yet marked paid">
+    <span>Remaining items</span><strong>{{ remaining|length }}</strong>
+    <small>{{ totals.debits|currency }} total budgeted debits</small>
+  </article>
+</section>
+
+<section class="dashboard-grid">
+  <article class="panel">
+    <div class="panel-heading"><div><p class="eyebrow">Plan</p><h2>Budget snapshot</h2></div></div>
+    <div class="budget-summary">
+      <div><span>Credits</span><strong class="positive-text">{{ totals.credits|currency }}</strong></div>
+      <div><span>Debits</span><strong class="negative-text">{{ totals.debits|currency }}</strong></div>
+      <div><span>Difference</span><strong>{{ totals.difference|currency }}</strong></div>
+    </div>
+    {% set max_total = (type_totals.values()|max if type_totals else 1) %}
+    <div class="bar-chart" aria-label="Budget totals by type">
+      {% for name, value in type_totals.items() %}
+      <div class="bar-row">
+        <span>{{ name }}</span>
+        <div class="bar-track"><div class="bar-fill" style="width: {{ ((value / max_total) * 100)|round }}%"></div></div>
+        <strong>{{ value|currency }}</strong>
+      </div>
+      {% else %}
+      <div class="empty-state">Add budget items to see your plan by category.</div>
+      {% endfor %}
+    </div>
+  </article>
+  <article class="panel">
+    <div class="panel-heading"><div><p class="eyebrow">Upcoming</p><h2>Remaining items</h2></div><a href="{{ url_for('main.budget', month=selected_month.strftime('%Y-%m')) }}">View budget</a></div>
+    <div class="compact-list">
+      {% for item in remaining[:6] %}
+      <div><span class="date-chip">{{ item.due_date.strftime('%b %d') }}</span><span>{{ item.description }}</span><strong>{{ item.amount|currency }}</strong></div>
+      {% else %}
+      <div class="empty-state">Nothing remains for this month.</div>
+      {% endfor %}
+    </div>
+  </article>
+</section>
+{% endblock %}

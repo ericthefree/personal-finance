@@ -1,0 +1,795 @@
+import csv
+import io
+import json
+import sqlite3
+import tempfile
+import uuid
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+
+from flask import (
+    Blueprint,
+    Response,
+    abort,
+    current_app,
+    flash,
+    redirect,
+    render_template,
+    request,
+    send_file,
+    url_for,
+)
+from sqlalchemy import asc, desc, func, or_
+
+from .categories import CATEGORY_TREE
+from .models import (
+    AuditRecord,
+    BalanceCheckpoint,
+    BudgetItem,
+    ImportBatch,
+    MonthRecord,
+    RecurringTemplate,
+    Transaction,
+    TransactionSplit,
+    db,
+)
+from .services import (
+    available_balance,
+    budget_type_totals,
+    budget_totals,
+    current_balance,
+    due_date_for,
+    duplicate_exists,
+    ensure_current_month,
+    month_start,
+    monthly_spending,
+    parse_csv_upload,
+)
+
+
+bp = Blueprint("main", __name__)
+VALID_INTERVALS = {1, 3, 6, 12}
+
+
+def parse_month(value):
+    try:
+        return datetime.strptime(value, "%Y-%m").date().replace(day=1)
+    except (TypeError, ValueError):
+        return month_start()
+
+
+def form_decimal(name, *, signed=True):
+    try:
+        value = Decimal(request.form[name].replace("$", "").replace(",", "")).quantize(
+            Decimal("0.01")
+        )
+    except (KeyError, InvalidOperation):
+        raise ValueError(f"{name.replace('_', ' ').title()} must be a valid amount.")
+    if not signed and value < 0:
+        raise ValueError(f"{name.replace('_', ' ').title()} cannot be negative.")
+    return value
+
+
+def recurrence_interval(value):
+    try:
+        interval = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Recurrence frequency is invalid.") from exc
+    if interval not in VALID_INTERVALS:
+        raise ValueError("Recurrence frequency is invalid.")
+    return interval
+
+
+def require_date_in_month(value, month):
+    if month_start(value) != month:
+        raise ValueError("Due date must be within the selected budget month.")
+
+
+@bp.before_app_request
+def maintain_months():
+    ensure_current_month()
+
+
+@bp.app_template_filter("currency")
+def currency(value):
+    if value is None:
+        return "—"
+    return f"${abs(Decimal(value)):,.2f}"
+
+
+@bp.app_template_filter("date_us")
+def date_us(value):
+    return value.strftime("%m-%d-%Y") if value else ""
+
+
+@bp.app_context_processor
+def shared_template_data():
+    return {"category_tree": CATEGORY_TREE, "today": date.today(), "today_month": month_start()}
+
+
+@bp.route("/")
+def summary():
+    month = parse_month(request.args.get("month"))
+    record = MonthRecord.query.filter_by(month=month).first()
+    balance = record.ending_balance if record and record.closed else current_balance()
+    items = BudgetItem.query.filter_by(month=month).filter(BudgetItem.deleted_at.is_(None)).all()
+    remaining = [item for item in items if not item.paid]
+    type_totals = {}
+    for item in items:
+        key = item.transaction_type or "Uncategorized"
+        type_totals[key] = type_totals.get(key, Decimal("0")) + abs(Decimal(item.amount))
+    records = MonthRecord.query.order_by(MonthRecord.month.desc()).all()
+    return render_template(
+        "summary.html",
+        selected_month=month,
+        spending=monthly_spending(month),
+        balance=balance,
+        available=available_balance(month, balance) if balance is not None else None,
+        remaining=remaining,
+        totals=budget_totals(month),
+        type_totals=type_totals,
+        month_records=records,
+    )
+
+
+@bp.route("/transactions")
+def transactions():
+    page = max(request.args.get("page", 1, type=int), 1)
+    query_text = request.args.get("q", "").strip()
+    sort = request.args.get("sort", "date")
+    direction = request.args.get("direction", "desc")
+    query = Transaction.query.filter(Transaction.deleted_at.is_(None))
+    if query_text:
+        like = f"%{query_text}%"
+        query = query.filter(
+            or_(Transaction.bank_description.ilike(like), Transaction.custom_description.ilike(like))
+        )
+    sort_column = Transaction.amount if sort == "amount" else Transaction.bank_date
+    query = query.order_by((asc if direction == "asc" else desc)(sort_column), Transaction.id.desc())
+    pagination = query.paginate(page=page, per_page=25, error_out=False)
+    expenses = Transaction.query.filter(
+        Transaction.amount < 0, Transaction.deleted_at.is_(None)
+    ).order_by(Transaction.bank_date.desc()).limit(200).all()
+    expense_options = [
+        {
+            "id": expense.id,
+            "label": f"{expense.bank_date:%m-%d} · {expense.display_description} · {currency(expense.amount)}",
+        }
+        for expense in expenses
+    ]
+    recurring_intervals = {
+        template.created_from_transaction_id: template.interval_months
+        for template in RecurringTemplate.query.filter(
+            RecurringTemplate.created_from_transaction_id.is_not(None)
+        )
+    }
+    return render_template(
+        "transactions.html",
+        transactions=pagination.items,
+        pagination=pagination,
+        query_text=query_text,
+        sort=sort,
+        direction=direction,
+        expenses=expenses,
+        expense_options=expense_options,
+        recurring_intervals=recurring_intervals,
+    )
+
+
+@bp.post("/transactions/add")
+def add_transaction():
+    try:
+        bank_date = datetime.strptime(request.form["date"], "%Y-%m-%d").date()
+        amount = form_decimal("amount")
+        description = request.form["description"].strip()
+        if not description:
+            raise ValueError("Description is required.")
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("main.transactions"))
+    transaction = Transaction(
+        bank_date=bank_date,
+        budget_month=month_start(),
+        amount=amount,
+        bank_description="Manual transaction",
+        custom_description=description,
+        transaction_type=request.form.get("transaction_type") or None,
+        parent_category=request.form.get("parent_category") or None,
+        subcategory=request.form.get("subcategory") or None,
+        is_reimbursement=request.form.get("is_reimbursement") == "on",
+        reimbursement_for_id=request.form.get("reimbursement_for_id", type=int),
+        source="manual",
+    )
+    db.session.add(transaction)
+    db.session.commit()
+    flash("Transaction added.", "success")
+    return redirect(url_for("main.transactions"))
+
+
+@bp.get("/transactions/<int:transaction_id>/matches")
+def transaction_matches(transaction_id):
+    transaction = db.get_or_404(Transaction, transaction_id)
+    matches = Transaction.query.filter(
+        Transaction.id != transaction.id,
+        Transaction.deleted_at.is_(None),
+        Transaction.bank_description == transaction.bank_description,
+        Transaction.amount == transaction.amount,
+    ).order_by(Transaction.bank_date.desc()).all()
+    return {
+        "matches": [
+            {
+                "id": match.id,
+                "date": match.bank_date.strftime("%m-%d-%Y"),
+                "description": match.display_description,
+                "amount": currency(match.amount),
+            }
+            for match in matches
+        ]
+    }
+
+
+@bp.post("/transactions/<int:transaction_id>/edit")
+def edit_transaction(transaction_id):
+    transaction = db.get_or_404(Transaction, transaction_id)
+    selected = {int(value) for value in request.form.getlist("apply_to")}
+    selected.add(transaction.id)
+    targets = Transaction.query.filter(Transaction.id.in_(selected), Transaction.deleted_at.is_(None)).all()
+    fields = {
+        "custom_description": request.form.get("custom_description", "").strip() or None,
+        "transaction_type": request.form.get("transaction_type") or None,
+        "parent_category": request.form.get("parent_category") or None,
+        "subcategory": request.form.get("subcategory") or None,
+    }
+    transaction.is_reimbursement = request.form.get("is_reimbursement") == "on"
+    transaction.reimbursement_for_id = request.form.get("reimbursement_for_id", type=int)
+    for target in targets:
+        for name, value in fields.items():
+            setattr(target, name, value)
+        db.session.add(
+            AuditRecord(
+                entity_type="transaction",
+                entity_id=target.id,
+                action="edit",
+                detail=json.dumps(fields),
+            )
+        )
+        template = RecurringTemplate.query.filter_by(
+            created_from_transaction_id=target.id
+        ).first()
+        if template:
+            template.description = target.display_description
+            template.transaction_type = target.transaction_type
+            template.parent_category = target.parent_category
+            template.subcategory = target.subcategory
+    db.session.commit()
+    flash(f"Updated {len(targets)} transaction(s).", "success")
+    return redirect(request.referrer or url_for("main.transactions"))
+
+
+@bp.post("/transactions/<int:transaction_id>/recurring")
+def toggle_recurring(transaction_id):
+    transaction = db.get_or_404(Transaction, transaction_id)
+    enabled = request.form.get("enabled") == "true"
+    transaction.is_recurring = enabled
+    template = RecurringTemplate.query.filter_by(created_from_transaction_id=transaction.id).first()
+    if enabled:
+        try:
+            interval = recurrence_interval(request.form.get("interval", 1))
+        except ValueError as exc:
+            return {"error": str(exc)}, 400
+        if template:
+            template.active = True
+            template.amount = transaction.amount
+            template.interval_months = interval
+        else:
+            template = RecurringTemplate(
+                description=transaction.display_description,
+                amount=transaction.amount,
+                day_of_month=transaction.bank_date.day,
+                anchor_month=transaction.budget_month,
+                interval_months=interval,
+                transaction_type=transaction.transaction_type,
+                parent_category=transaction.parent_category,
+                subcategory=transaction.subcategory,
+                is_reimbursement=transaction.is_reimbursement,
+                created_from_transaction_id=transaction.id,
+            )
+            db.session.add(template)
+            db.session.flush()
+            db.session.add(
+                BudgetItem(
+                    month=month_start(),
+                    due_date=due_date_for(month_start(), transaction.bank_date.day),
+                    description=template.description,
+                    amount=template.amount,
+                    transaction_type=template.transaction_type,
+                    parent_category=template.parent_category,
+                    subcategory=template.subcategory,
+                    recurring_template_id=template.id,
+                )
+            )
+    elif template:
+        template.active = False
+    db.session.commit()
+    return {"ok": True, "enabled": enabled}
+
+
+@bp.post("/transactions/<int:transaction_id>/delete")
+def delete_transaction(transaction_id):
+    transaction = db.get_or_404(Transaction, transaction_id)
+    transaction.deleted_at = datetime.now()
+    db.session.add(
+        AuditRecord(entity_type="transaction", entity_id=transaction.id, action="delete")
+    )
+    db.session.commit()
+    flash("Transaction removed and retained in the audit record.", "success")
+    return redirect(url_for("main.transactions"))
+
+
+@bp.post("/transactions/<int:transaction_id>/splits")
+def save_splits(transaction_id):
+    transaction = db.get_or_404(Transaction, transaction_id)
+    payload = request.get_json(force=True)
+    splits = payload.get("splits", [])
+    try:
+        amounts = [Decimal(str(split["amount"])) for split in splits]
+        intervals = [
+            recurrence_interval(split.get("interval_months", 1))
+            for split in splits
+        ]
+    except (InvalidOperation, KeyError, ValueError):
+        return {"error": "Every split needs a valid amount."}, 400
+    if sum(amounts, Decimal("0")) != Decimal(transaction.amount):
+        return {"error": "Split amounts must equal the bank transaction amount."}, 400
+    old_split_ids = [split.id for split in transaction.splits]
+    if old_split_ids:
+        RecurringTemplate.query.filter(
+            RecurringTemplate.created_from_split_id.in_(old_split_ids)
+        ).update({RecurringTemplate.active: False}, synchronize_session=False)
+    transaction.splits.clear()
+    for split, amount, interval in zip(splits, amounts, intervals):
+        transaction_split = TransactionSplit(
+            description=split.get("description", "").strip() or transaction.display_description,
+            amount=amount,
+            transaction_type=split.get("transaction_type") or None,
+            parent_category=split.get("parent_category") or None,
+            subcategory=split.get("subcategory") or None,
+            is_recurring=bool(split.get("is_recurring")),
+            is_reimbursement=bool(split.get("is_reimbursement")),
+            reimbursement_for_id=split.get("reimbursement_for_id") or None,
+        )
+        transaction.splits.append(transaction_split)
+        db.session.flush()
+        if transaction_split.is_recurring:
+            template = RecurringTemplate(
+                description=transaction_split.description,
+                amount=transaction_split.amount,
+                day_of_month=transaction.bank_date.day,
+                anchor_month=transaction.budget_month,
+                interval_months=interval,
+                transaction_type=transaction_split.transaction_type,
+                parent_category=transaction_split.parent_category,
+                subcategory=transaction_split.subcategory,
+                is_reimbursement=transaction_split.is_reimbursement,
+                created_from_split_id=transaction_split.id,
+            )
+            db.session.add(template)
+            db.session.flush()
+            db.session.add(
+                BudgetItem(
+                    month=month_start(),
+                    due_date=due_date_for(month_start(), transaction.bank_date.day),
+                    description=template.description,
+                    amount=template.amount,
+                    transaction_type=template.transaction_type,
+                    parent_category=template.parent_category,
+                    subcategory=template.subcategory,
+                    is_reimbursement=template.is_reimbursement,
+                    recurring_template_id=template.id,
+                )
+            )
+    db.session.commit()
+    return {"ok": True}
+
+
+@bp.get("/transactions/<int:transaction_id>/splits")
+def get_splits(transaction_id):
+    transaction = db.get_or_404(Transaction, transaction_id)
+    return {
+        "splits": [
+            {
+                "description": split.description,
+                "amount": str(split.amount),
+                "transaction_type": split.transaction_type or "",
+                "parent_category": split.parent_category or "",
+                "subcategory": split.subcategory or "",
+                "is_recurring": split.is_recurring,
+                "is_reimbursement": split.is_reimbursement,
+                "reimbursement_for_id": split.reimbursement_for_id,
+                "interval_months": (
+                    RecurringTemplate.query.filter_by(
+                        created_from_split_id=split.id, active=True
+                    ).first().interval_months
+                    if split.is_recurring
+                    and RecurringTemplate.query.filter_by(
+                        created_from_split_id=split.id, active=True
+                    ).first()
+                    else 1
+                ),
+            }
+            for split in transaction.splits
+        ]
+    }
+
+
+@bp.route("/budget")
+def budget():
+    month = parse_month(request.args.get("month"))
+    record = MonthRecord.query.filter_by(month=month).first()
+    items = BudgetItem.query.filter_by(month=month).filter(BudgetItem.deleted_at.is_(None)).order_by(
+        BudgetItem.due_date
+    ).all()
+    all_history = [
+        history_record
+        for history_record in MonthRecord.query.order_by(MonthRecord.month.desc()).all()
+        if history_record.month != month
+    ]
+    recent = all_history[:3]
+    older = all_history[3:]
+    available_transactions = Transaction.query.filter_by(budget_month=month).filter(
+        Transaction.deleted_at.is_(None)
+    ).order_by(Transaction.bank_date.desc()).all()
+    available_matches = []
+    for transaction in available_transactions:
+        available_matches.append(
+            {
+                "value": f"transaction:{transaction.id}",
+                "label": f"{transaction.bank_date:%m-%d} · {transaction.display_description} · {currency(transaction.amount)}",
+                "date": transaction.bank_date,
+                "description": transaction.display_description,
+                "amount": Decimal(transaction.amount),
+                "selected_for": [
+                    item.id for item in items if item.transaction_id == transaction.id
+                ],
+            }
+        )
+        for split in transaction.splits:
+            available_matches.append(
+                {
+                    "value": f"split:{split.id}",
+                    "label": f"{transaction.bank_date:%m-%d} · {split.description} (split) · {currency(split.amount)}",
+                    "date": transaction.bank_date,
+                    "description": split.description,
+                    "amount": Decimal(split.amount),
+                    "selected_for": [
+                        item.id for item in items if item.transaction_split_id == split.id
+                    ],
+                }
+            )
+    budget_matches = {}
+    for item in items:
+        item_description = item.description.casefold()
+
+        def match_score(match):
+            match_description = match["description"].casefold()
+            description_score = 3 if match_description == item_description else 0
+            if not description_score and (
+                match_description in item_description or item_description in match_description
+            ):
+                description_score = 1
+            return (
+                (5 if match["amount"] == Decimal(item.amount) else 0)
+                + (2 if match["date"].day == item.due_date.day else 0)
+                + description_score
+            )
+
+        ranked = sorted(available_matches, key=match_score, reverse=True)
+        budget_matches[item.id] = [
+            {
+                **match,
+                "suggested": match_score(match) >= 7,
+            }
+            for match in ranked
+        ]
+    history_summaries = [
+        {"record": history_record, "totals": budget_type_totals(history_record.month)}
+        for history_record in recent
+    ]
+    return render_template(
+        "budget.html",
+        selected_month=month,
+        record=record,
+        items=items,
+        totals=budget_totals(month),
+        recent=recent,
+        older=older,
+        budget_matches=budget_matches,
+        history_summaries=history_summaries,
+    )
+
+
+@bp.post("/budget/add")
+def add_budget_item():
+    month = parse_month(request.form.get("month"))
+    record = MonthRecord.query.filter_by(month=month).first()
+    if record and record.closed:
+        abort(409, "Closed months are read-only.")
+    try:
+        amount = form_decimal("amount")
+        due_date = datetime.strptime(request.form["due_date"], "%Y-%m-%d").date()
+        require_date_in_month(due_date, month)
+        description = request.form["description"].strip()
+        if not description:
+            raise ValueError("Description is required.")
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("main.budget", month=month.strftime("%Y-%m")))
+    db.session.add(
+        BudgetItem(
+            month=month,
+            due_date=due_date,
+            description=description,
+            amount=amount,
+            transaction_type=request.form.get("transaction_type") or None,
+            parent_category=request.form.get("parent_category") or None,
+            subcategory=request.form.get("subcategory") or None,
+            is_reimbursement=request.form.get("is_reimbursement") == "on",
+        )
+    )
+    db.session.commit()
+    flash("Budget item added.", "success")
+    return redirect(url_for("main.budget", month=month.strftime("%Y-%m")))
+
+
+@bp.post("/budget/<int:item_id>/edit")
+def edit_budget_item(item_id):
+    item = db.get_or_404(BudgetItem, item_id)
+    record = MonthRecord.query.filter_by(month=item.month).first()
+    if record and record.closed:
+        abort(409, "Closed months are read-only.")
+    try:
+        item.amount = form_decimal("amount")
+        item.due_date = datetime.strptime(request.form["due_date"], "%Y-%m-%d").date()
+        require_date_in_month(item.due_date, item.month)
+        description = request.form["description"].strip()
+        if not description:
+            raise ValueError("Description is required.")
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("main.budget", month=item.month.strftime("%Y-%m")))
+    item.description = description
+    item.transaction_type = request.form.get("transaction_type") or None
+    item.parent_category = request.form.get("parent_category") or None
+    item.subcategory = request.form.get("subcategory") or None
+    item.is_reimbursement = request.form.get("is_reimbursement") == "on"
+    if item.recurring_template:
+        template = item.recurring_template
+        template.description = item.description
+        template.amount = item.amount
+        template.day_of_month = item.due_date.day
+        template.transaction_type = item.transaction_type
+        template.parent_category = item.parent_category
+        template.subcategory = item.subcategory
+        template.is_reimbursement = item.is_reimbursement
+    db.session.commit()
+    flash("Budget item updated.", "success")
+    return redirect(url_for("main.budget", month=item.month.strftime("%Y-%m")))
+
+
+@bp.post("/budget/<int:item_id>/paid")
+def mark_budget_paid(item_id):
+    item = db.get_or_404(BudgetItem, item_id)
+    record = MonthRecord.query.filter_by(month=item.month).first()
+    if record and record.closed:
+        abort(409, "Closed months are read-only.")
+    item.paid = request.form.get("paid") == "true"
+    match_value = request.form.get("transaction_match", "")
+    if item.paid and match_value:
+        try:
+            match_type, raw_match_id = match_value.split(":", 1)
+            match_id = int(raw_match_id)
+        except (ValueError, TypeError):
+            return {"error": "Transaction match is invalid."}, 400
+        if match_type not in {"transaction", "split"}:
+            return {"error": "Transaction match is invalid."}, 400
+        if match_type == "split":
+            split = db.get_or_404(TransactionSplit, match_id)
+            item.transaction_id = None
+            item.transaction_split_id = split.id
+            item.actual_amount = split.amount
+        else:
+            transaction = db.get_or_404(Transaction, match_id)
+            item.transaction_id = transaction.id
+            item.transaction_split_id = None
+            item.actual_amount = transaction.amount
+        if item.recurring_template:
+            item.recurring_template.amount = item.actual_amount
+    elif not item.paid:
+        item.transaction_id = None
+        item.transaction_split_id = None
+        item.actual_amount = None
+    db.session.commit()
+    return {"ok": True}
+
+
+@bp.post("/budget/<int:item_id>/delete")
+def delete_budget_item(item_id):
+    item = db.get_or_404(BudgetItem, item_id)
+    record = MonthRecord.query.filter_by(month=item.month).first()
+    if record and record.closed:
+        abort(409, "Closed months are read-only.")
+    item.deleted_at = datetime.now()
+    if item.recurring_template:
+        item.recurring_template.active = False
+    db.session.commit()
+    flash("Budget item removed from this and future months.", "success")
+    return redirect(url_for("main.budget", month=item.month.strftime("%Y-%m")))
+
+
+@bp.route("/admin")
+def admin():
+    batches = ImportBatch.query.order_by(ImportBatch.imported_at.desc()).all()
+    checkpoints = BalanceCheckpoint.query.order_by(BalanceCheckpoint.created_at.desc()).all()
+    return render_template(
+        "admin.html",
+        batches=batches,
+        checkpoints=checkpoints,
+        current_balance=current_balance(),
+        needs_initial_balance=not bool(checkpoints),
+    )
+
+
+@bp.post("/admin/import/preview")
+def import_preview():
+    upload = request.files.get("csv_file")
+    if not upload or not upload.filename:
+        flash("Choose a CSV file.", "error")
+        return redirect(url_for("main.admin"))
+    try:
+        rows = parse_csv_upload(upload.read())
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("main.admin"))
+    for row in rows:
+        row["duplicate"] = row["duplicate_in_file"] or duplicate_exists(row)
+        row["display_date"] = date.fromisoformat(row["bank_date"]).strftime("%m-%d-%Y")
+    token = uuid.uuid4().hex
+    payload = {"filename": upload.filename, "rows": rows}
+    preview_path = Path(current_app.instance_path, "import_previews", f"{token}.json")
+    preview_path.write_text(json.dumps(payload), encoding="utf-8")
+    return render_template(
+        "import_preview.html",
+        token=token,
+        filename=upload.filename,
+        rows=rows,
+        needs_initial_balance=BalanceCheckpoint.query.first() is None,
+    )
+
+
+@bp.post("/admin/import/confirm")
+def import_confirm():
+    token = request.form.get("token", "")
+    if not token.isalnum():
+        abort(400)
+    preview_path = Path(current_app.instance_path, "import_previews", f"{token}.json")
+    if not preview_path.exists():
+        flash("That import preview expired. Upload the file again.", "error")
+        return redirect(url_for("main.admin"))
+    payload = json.loads(preview_path.read_text(encoding="utf-8"))
+    batch = ImportBatch(filename=payload["filename"])
+    db.session.add(batch)
+    db.session.flush()
+    imported = 0
+    duplicates = 0
+    current = month_start()
+    for row in payload["rows"]:
+        if row["duplicate"] or duplicate_exists(row):
+            duplicates += 1
+            continue
+        bank_date = date.fromisoformat(row["bank_date"])
+        row_month = month_start(bank_date)
+        closed = MonthRecord.query.filter_by(month=row_month, closed=True).first()
+        if not closed and not MonthRecord.query.filter_by(month=row_month).first():
+            db.session.add(MonthRecord(month=row_month, closed=row_month < current))
+        db.session.add(
+            Transaction(
+                bank_date=bank_date,
+                budget_month=current if closed else row_month,
+                amount=Decimal(row["amount"]),
+                bank_description=row["description"],
+                import_batch_id=batch.id,
+            )
+        )
+        imported += 1
+    db.session.flush()
+    batch.imported_count = imported
+    batch.duplicate_count = duplicates
+    if BalanceCheckpoint.query.first() is None:
+        try:
+            initial_balance = form_decimal("initial_balance")
+        except ValueError as exc:
+            db.session.rollback()
+            flash(str(exc), "error")
+            return redirect(url_for("main.admin"))
+        max_id = db.session.query(func.max(Transaction.id)).scalar() or 0
+        db.session.add(BalanceCheckpoint(balance=initial_balance, transaction_cutoff_id=max_id))
+    db.session.commit()
+    preview_path.unlink(missing_ok=True)
+    flash(f"Imported {imported} transaction(s); discarded {duplicates} duplicate(s).", "success")
+    return redirect(url_for("main.transactions"))
+
+
+@bp.post("/admin/balance")
+def reset_balance():
+    try:
+        entered = form_decimal("balance")
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("main.admin"))
+    calculated = current_balance()
+    max_id = db.session.query(func.max(Transaction.id)).scalar() or 0
+    db.session.add(
+        BalanceCheckpoint(
+            balance=entered,
+            transaction_cutoff_id=max_id,
+            calculated_before_reset=calculated,
+            discrepancy=entered - calculated if calculated is not None else None,
+        )
+    )
+    db.session.commit()
+    flash("Balance checkpoint saved.", "success")
+    return redirect(url_for("main.admin"))
+
+
+@bp.get("/admin/backup")
+def backup_database():
+    database = Path(db.engine.url.database)
+    with tempfile.NamedTemporaryFile(suffix=".db") as temporary:
+        with sqlite3.connect(database) as source, sqlite3.connect(temporary.name) as destination:
+            source.backup(destination)
+        backup = io.BytesIO(Path(temporary.name).read_bytes())
+    return send_file(
+        backup,
+        as_attachment=True,
+        download_name=f"personal-finance-{date.today()}.db",
+        mimetype="application/vnd.sqlite3",
+    )
+
+
+@bp.get("/admin/export/transactions")
+def export_transactions():
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Date", "Amount", "Custom Description", "Bank Description", "Type", "Parent", "Subcategory"])
+    for transaction in Transaction.query.filter(Transaction.deleted_at.is_(None)).order_by(Transaction.bank_date):
+        writer.writerow(
+            [
+                transaction.bank_date.strftime("%m-%d-%Y"),
+                transaction.amount,
+                transaction.display_description,
+                transaction.bank_description,
+                transaction.transaction_type or "",
+                transaction.parent_category or "",
+                transaction.subcategory or "",
+            ]
+        )
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=transactions.csv"},
+    )
+
+
+@bp.get("/admin/export/budget")
+def export_budget():
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Month", "Due Date", "Description", "Amount", "Paid", "Actual"])
+    for item in BudgetItem.query.filter(BudgetItem.deleted_at.is_(None)).order_by(BudgetItem.month, BudgetItem.due_date):
+        writer.writerow([item.month.strftime("%Y-%m"), item.due_date, item.description, item.amount, item.paid, item.actual_amount or ""])
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=budgets.csv"},
+    )

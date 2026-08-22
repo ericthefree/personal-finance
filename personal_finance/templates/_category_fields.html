@@ -1,0 +1,14 @@
+{% macro category_fields(prefix='', selected_type='', selected_parent='', selected_subcategory='', form_id='') %}
+  <select name="transaction_type" class="category-type" data-selected="{{ selected_type or '' }}" aria-label="Type" {% if form_id %}form="{{ form_id }}"{% endif %}>
+    <option value="">Type</option>
+    {% for type_name in category_tree %}
+      <option value="{{ type_name }}" {{ 'selected' if selected_type == type_name }}>{{ type_name }}</option>
+    {% endfor %}
+  </select>
+  <select name="parent_category" class="category-parent" data-selected="{{ selected_parent or '' }}" aria-label="Parent category" {% if form_id %}form="{{ form_id }}"{% endif %}>
+    <option value="">Parent</option>
+  </select>
+  <select name="subcategory" class="category-sub" data-selected="{{ selected_subcategory or '' }}" aria-label="Subcategory" {% if form_id %}form="{{ form_id }}"{% endif %}>
+    <option value="">Subcategory</option>
+  </select>
+{% endmacro %}

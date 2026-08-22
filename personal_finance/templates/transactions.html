@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% from "_category_fields.html" import category_fields with context %}
+{% block title %}Transactions · Personal Finance{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <div><p class="eyebrow">Activity</p><h1>Transactions</h1><p>Review, categorize, and manage checking activity.</p></div>
+  <button class="button primary" type="button" data-open-dialog="add-transaction">+ Add transaction</button>
+</section>
+
+<form class="toolbar" method="get">
+  <label class="search-field"><span class="sr-only">Search transactions</span><input type="search" name="q" value="{{ query_text }}" placeholder="Search descriptions…"></label>
+  <label>Sort
+    <select name="sort" onchange="this.form.submit()"><option value="date" {{ 'selected' if sort == 'date' }}>Date</option><option value="amount" {{ 'selected' if sort == 'amount' }}>Amount</option></select>
+  </label>
+  <label>Order
+    <select name="direction" onchange="this.form.submit()"><option value="desc" {{ 'selected' if direction == 'desc' }}>Newest / highest</option><option value="asc" {{ 'selected' if direction == 'asc' }}>Oldest / lowest</option></select>
+  </label>
+  <button class="button" type="submit">Search</button>
+</form>
+
+<div class="table-panel transaction-table-wrap">
+  <table class="data-table transaction-table">
+    <thead><tr><th>Date</th><th>Custom description</th><th class="amount-cell">Amount</th><th>Type / category</th><th>Bank description</th><th>Recurring</th><th><span class="sr-only">Actions</span></th></tr></thead>
+    <tbody>
+    {% for transaction in transactions %}
+      {% set form_id = 'edit-' ~ transaction.id %}
+      <tr class="{{ 'credit-row' if transaction.amount > 0 else 'debit-row' }}">
+        <td data-label="Date"><form id="{{ form_id }}" class="transaction-edit-form" action="{{ url_for('main.edit_transaction', transaction_id=transaction.id) }}" method="post" data-transaction-id="{{ transaction.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"></form>{{ transaction.bank_date|date_us }}</td>
+        <td data-label="Custom description"><input class="inline-input" form="{{ form_id }}" name="custom_description" value="{{ transaction.display_description }}" aria-label="Custom description"></td>
+        <td data-label="Amount" class="amount-cell"><span class="accounting"><span>$</span><span>{{ '{:,.2f}'.format(transaction.amount|abs) }}</span></span></td>
+        <td data-label="Category" class="category-stack">
+          {{ category_fields(selected_type=transaction.transaction_type, selected_parent=transaction.parent_category, selected_subcategory=transaction.subcategory, form_id=form_id) }}
+          {% if transaction.amount > 0 %}<label class="mini-checkbox"><input form="{{ form_id }}" type="checkbox" name="is_reimbursement" {{ 'checked' if transaction.is_reimbursement }}> Reimbursement</label>
+          <select form="{{ form_id }}" name="reimbursement_for_id" aria-label="Linked expense"><option value="">Link expense…</option>{% for expense in expenses %}<option value="{{ expense.id }}" {{ 'selected' if transaction.reimbursement_for_id == expense.id }}>{{ expense.bank_date.strftime('%m-%d') }} · {{ expense.display_description }} · {{ expense.amount|currency }}</option>{% endfor %}</select>{% endif %}
+        </td>
+        <td data-label="Bank description"><span class="bank-description">{{ transaction.bank_description }}</span>{% if transaction.splits %}<span class="badge">{{ transaction.splits|length }} splits</span>{% endif %}</td>
+        <td data-label="Recurring">
+          <div class="recurring-control">
+            <input type="checkbox" class="recurring-toggle" data-url="{{ url_for('main.toggle_recurring', transaction_id=transaction.id) }}" {{ 'checked' if transaction.is_recurring }} aria-label="Recurring transaction">
+            {% set interval = recurring_intervals.get(transaction.id, 1) %}<select class="recurrence-interval" aria-label="Recurrence frequency"><option value="1" {{ 'selected' if interval == 1 }}>Monthly</option><option value="3" {{ 'selected' if interval == 3 }}>Quarterly</option><option value="6" {{ 'selected' if interval == 6 }}>Every 6 months</option><option value="12" {{ 'selected' if interval == 12 }}>Yearly</option></select>
+          </div>
+        </td>
+        <td class="row-actions">
+          <button class="icon-button save-transaction" type="submit" form="{{ form_id }}" title="Save changes">Save</button>
+          <button class="icon-button split-button mobile-restricted" type="button" data-id="{{ transaction.id }}" data-amount="{{ transaction.amount }}" data-description="{{ transaction.display_description }}">Split</button>
+          <form action="{{ url_for('main.delete_transaction', transaction_id=transaction.id) }}" method="post" onsubmit="return confirm('Delete this transaction? It will remain in the audit record.')"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="icon-button danger" type="submit">Delete</button></form>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7" class="empty-state">No transactions yet. Add one or upload a CSV from Admin.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if pagination.pages > 1 %}
+<nav class="pagination" aria-label="Transaction pages">
+  {% if pagination.has_prev %}<a href="{{ url_for('main.transactions', page=pagination.prev_num, q=query_text, sort=sort, direction=direction) }}">← Previous</a>{% endif %}
+  <span>Page {{ pagination.page }} of {{ pagination.pages }}</span>
+  {% if pagination.has_next %}<a href="{{ url_for('main.transactions', page=pagination.next_num, q=query_text, sort=sort, direction=direction) }}">Next →</a>{% endif %}
+</nav>
+{% endif %}
+
+<dialog id="add-transaction">
+  <form action="{{ url_for('main.add_transaction') }}" method="post" class="dialog-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="dialog-heading"><h2>Add transaction</h2><button type="button" class="close-dialog" aria-label="Close">×</button></div>
+    <label>Date<input type="date" name="date" value="{{ today.strftime('%Y-%m-%d') }}" required></label>
+    <label>Description<input name="description" required></label>
+    <label>Signed amount <small>Use a minus sign for debits</small><input name="amount" inputmode="decimal" placeholder="-45.25" required></label>
+    <div class="category-grid">{{ category_fields() }}</div>
+    <label class="checkbox-label"><input type="checkbox" name="is_reimbursement"> This credit reimburses an expense</label>
+    <label>Linked expense<select name="reimbursement_for_id"><option value="">None</option>{% for expense in expenses %}<option value="{{ expense.id }}">{{ expense.bank_date.strftime('%m-%d') }} · {{ expense.display_description }} · {{ expense.amount|currency }}</option>{% endfor %}</select></label>
+    <div class="dialog-actions"><button type="button" class="button close-dialog">Cancel</button><button class="button primary" type="submit">Add transaction</button></div>
+  </form>
+</dialog>
+
+<dialog id="bulk-update-dialog">
+  <form method="dialog" class="dialog-form">
+    <div class="dialog-heading"><h2>Update matching transactions?</h2><button value="cancel" class="close-dialog" aria-label="Close">×</button></div>
+    <p>Choose transactions that should receive the same description and categories.</p>
+    <div id="match-list" class="check-list"></div>
+    <div class="dialog-actions"><button value="cancel" class="button">Only this transaction</button><button id="confirm-bulk" value="default" class="button primary">Update selected</button></div>
+  </form>
+</dialog>
+
+<dialog id="split-dialog">
+  <form method="dialog" class="dialog-form wide" id="split-form">
+    <div class="dialog-heading"><h2>Split transaction</h2><button value="cancel" class="close-dialog" aria-label="Close">×</button></div>
+    <p id="split-total"></p><p class="muted">Each split can have its own category and recurring or reimbursement status.</p><div id="split-lines"></div>
+    <button type="button" class="button" id="add-split-line">+ Add split</button>
+    <p class="form-error" id="split-error" role="alert"></p>
+    <div class="dialog-actions"><button value="cancel" class="button">Cancel</button><button type="button" id="save-splits" class="button primary">Save splits</button></div>
+  </form>
+</dialog>
+
+<script id="category-data" type="application/json">{{ category_tree|tojson }}</script>
+<script id="expense-data" type="application/json">{{ expense_options|tojson }}</script>
+{% endblock %}

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% from "_category_fields.html" import category_fields with context %}
+{% block title %}Budget · Personal Finance{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <div><p class="eyebrow">Monthly plan</p><h1>{{ selected_month.strftime('%B %Y') }} budget</h1><p>{{ 'This month is closed and read-only.' if record and record.closed else 'Plan expected credits and debits, then confirm them as paid.' }}</p></div>
+  <div class="heading-actions">
+    <form class="month-picker" method="get"><label for="budget-month">View month</label><input id="budget-month" type="month" name="month" value="{{ selected_month.strftime('%Y-%m') }}" onchange="this.form.submit()"></form>
+    {% if not record or not record.closed %}<button class="button primary mobile-restricted" type="button" data-open-dialog="add-budget">+ Add item</button>{% endif %}
+  </div>
+</section>
+
+<section class="mini-metrics">
+  <div><span>Budgeted credits</span><strong class="positive-text">{{ totals.credits|currency }}</strong></div>
+  <div><span>Budgeted debits</span><strong class="negative-text">{{ totals.debits|currency }}</strong></div>
+  <div><span>Difference</span><strong>{{ totals.difference|currency }}</strong></div>
+  {% if record and record.ending_balance is not none %}<div><span>Ending balance</span><strong>{{ record.ending_balance|currency }}</strong></div>{% endif %}
+</section>
+
+<div class="table-panel">
+<table class="data-table budget-table">
+  <thead><tr><th>Due</th><th>Description</th><th>Type</th><th>Category</th><th class="amount-cell">Budget</th><th class="amount-cell">Actual</th><th>Status</th><th></th></tr></thead>
+  <tbody>
+  {% for item in items %}
+  <tr class="{{ 'paid-row' if item.paid }}">
+    <td data-label="Due">{{ item.due_date|date_us }}</td><td data-label="Description">{{ item.description }}{% if item.recurring_template_id %}<span class="badge">Recurring</span>{% endif %}</td>
+    <td data-label="Type">{{ item.transaction_type or '—' }}</td><td data-label="Category">{{ item.parent_category or '—' }}{% if item.subcategory %} · {{ item.subcategory }}{% endif %}</td>
+    <td data-label="Budget" class="amount-cell">{{ item.amount|currency }}</td><td data-label="Actual" class="amount-cell">{{ item.actual_amount|currency }}</td>
+    <td data-label="Status">
+      {% if record and record.closed %}<span class="status {{ 'complete' if item.paid }}">{{ 'Paid' if item.paid else 'Remaining' }}</span>
+      {% else %}<label class="paid-toggle"><input type="checkbox" data-paid-url="{{ url_for('main.mark_budget_paid', item_id=item.id) }}" {{ 'checked' if item.paid }}> <span>{{ 'Paid' if item.paid else 'Mark paid' }}</span></label>
+      <select class="transaction-match" aria-label="Associate transaction"><option value="">No transaction</option>{% for match in budget_matches[item.id] %}<option value="{{ match.value }}" {{ 'selected' if item.id in match.selected_for }}>{{ 'Suggested · ' if match.suggested }}{{ match.label }}</option>{% endfor %}</select>{% endif %}
+    </td>
+    <td>{% if not record or not record.closed %}<button class="icon-button edit-budget mobile-restricted" type="button" data-url="{{ url_for('main.edit_budget_item', item_id=item.id) }}" data-description="{{ item.description }}" data-date="{{ item.due_date.isoformat() }}" data-amount="{{ item.amount }}" data-type="{{ item.transaction_type or '' }}" data-parent="{{ item.parent_category or '' }}" data-subcategory="{{ item.subcategory or '' }}" data-reimbursement="{{ 'true' if item.is_reimbursement else 'false' }}">Edit</button><form action="{{ url_for('main.delete_budget_item', item_id=item.id) }}" method="post" onsubmit="return confirm('Remove this item and disable its future recurrence?')"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="icon-button danger">Delete</button></form>{% endif %}</td>
+  </tr>
+  {% else %}<tr><td colspan="8" class="empty-state">No budget items for this month.</td></tr>{% endfor %}
+  </tbody>
+</table>
+</div>
+
+<section class="panel history-panel">
+  <div class="panel-heading"><div><p class="eyebrow">History</p><h2>Previous monthly totals</h2></div>{% if older %}<select onchange="if(this.value) location.href=this.value"><option value="">Older months…</option>{% for month in older %}<option value="{{ url_for('main.budget', month=month.month.strftime('%Y-%m')) }}">{{ month.month.strftime('%B %Y') }}</option>{% endfor %}</select>{% endif %}</div>
+  <div class="history-grid">{% for summary in history_summaries %}<a href="{{ url_for('main.budget', month=summary.record.month.strftime('%Y-%m')) }}"><span>{{ summary.record.month.strftime('%B %Y') }}</span><strong>{{ summary.totals.difference|currency }} difference</strong><small>Income {{ summary.totals.income|currency }} · Expenses {{ summary.totals.expenses|currency }} · Bills {{ summary.totals.bills|currency }} · Loans {{ summary.totals.loans|currency }} · Cards {{ summary.totals.credit_cards|currency }}</small></a>{% else %}<div class="empty-state">Monthly history will appear after rollover.</div>{% endfor %}</div>
+</section>
+
+<dialog id="add-budget">
+  <form action="{{ url_for('main.add_budget_item') }}" method="post" class="dialog-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="month" value="{{ selected_month.strftime('%Y-%m') }}">
+    <div class="dialog-heading"><h2>Add budget item</h2><button type="button" class="close-dialog" aria-label="Close">×</button></div>
+    <label>Description<input name="description" required></label><label>Due date<input type="date" name="due_date" value="{{ selected_month.strftime('%Y-%m-01') }}" required></label>
+    <label>Signed amount <small>Credits positive, debits negative</small><input name="amount" inputmode="decimal" required></label>
+    <div class="category-grid">{{ category_fields() }}</div><label class="checkbox-label"><input type="checkbox" name="is_reimbursement"> This is an expense reimbursement</label>
+    <div class="dialog-actions"><button type="button" class="button close-dialog">Cancel</button><button class="button primary">Add item</button></div>
+  </form>
+</dialog>
+<dialog id="edit-budget">
+  <form method="post" class="dialog-form" id="edit-budget-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="dialog-heading"><h2>Edit budget item</h2><button type="button" class="close-dialog" aria-label="Close">×</button></div>
+    <label>Description<input name="description" required></label><label>Due date<input type="date" name="due_date" required></label>
+    <label>Signed amount<input name="amount" inputmode="decimal" required></label>
+    <div class="category-grid">{{ category_fields() }}</div><label class="checkbox-label"><input type="checkbox" name="is_reimbursement"> This is an expense reimbursement</label>
+    <div class="dialog-actions"><button type="button" class="button close-dialog">Cancel</button><button class="button primary">Save changes</button></div>
+  </form>
+</dialog>
+<script id="category-data" type="application/json">{{ category_tree|tojson }}</script>
+{% endblock %}
