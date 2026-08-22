@@ -91,7 +91,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   document.querySelectorAll(".transaction-edit-form").forEach((form) => {
     document.querySelectorAll(`[form="${form.id}"]`).forEach((control) => {
-      if (control.matches('[name="custom_description"], .category-sub, [name="is_reimbursement"], [name="reimbursement_for_id"]')) {
+      if (control.matches('[name="custom_description"], [name="amount"], .category-sub, [name="is_reimbursement"], [name="reimbursement_for_id"]')) {
         control.addEventListener("change", () => form.requestSubmit());
       }
     });

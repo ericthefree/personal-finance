@@ -15,6 +15,7 @@ from personal_finance.services import (
     current_balance,
     generate_budget_items,
     month_start,
+    monthly_activity,
     monthly_spending,
     parse_csv_upload,
 )
@@ -134,6 +135,36 @@ def test_spending_excludes_transfers_and_subtracts_reimbursements(app):
         db.session.commit()
 
         assert monthly_spending() == Decimal("350.00")
+        assert monthly_activity() == {
+            "income": Decimal("0"),
+            "expenses": Decimal("350.00"),
+        }
+
+
+def test_monthly_activity_separates_income_and_expenses(app):
+    with app.app_context():
+        db.session.add_all(
+            [
+                Transaction(
+                    bank_date=date.today(),
+                    budget_month=month_start(),
+                    amount=2500,
+                    bank_description="Income",
+                ),
+                Transaction(
+                    bank_date=date.today(),
+                    budget_month=month_start(),
+                    amount=-625,
+                    bank_description="Expense",
+                ),
+            ]
+        )
+        db.session.commit()
+
+        assert monthly_activity() == {
+            "income": Decimal("2500.00"),
+            "expenses": Decimal("625.00"),
+        }
 
 
 def test_recurring_day_uses_last_day_of_short_month(app):

@@ -36,6 +36,7 @@ from .models import (
 )
 from .services import (
     available_balance,
+    add_months,
     budget_type_totals,
     budget_totals,
     current_balance,
@@ -43,7 +44,7 @@ from .services import (
     duplicate_exists,
     ensure_current_month,
     month_start,
-    monthly_spending,
+    monthly_activity,
     parse_csv_upload,
 )
 
@@ -111,6 +112,7 @@ def shared_template_data():
 @bp.route("/")
 def summary():
     month = parse_month(request.args.get("month"))
+    previous_month = add_months(month, -1)
     record = MonthRecord.query.filter_by(month=month).first()
     balance = record.ending_balance if record and record.closed else current_balance()
     items = BudgetItem.query.filter_by(month=month).filter(BudgetItem.deleted_at.is_(None)).all()
@@ -123,7 +125,9 @@ def summary():
     return render_template(
         "summary.html",
         selected_month=month,
-        spending=monthly_spending(month),
+        activity=monthly_activity(month),
+        previous_month=previous_month,
+        previous_activity=monthly_activity(previous_month),
         balance=balance,
         available=available_balance(month, balance) if balance is not None else None,
         remaining=remaining,
@@ -232,6 +236,14 @@ def transaction_matches(transaction_id):
 @bp.post("/transactions/<int:transaction_id>/edit")
 def edit_transaction(transaction_id):
     transaction = db.get_or_404(Transaction, transaction_id)
+    try:
+        amount = form_decimal("amount")
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(request.referrer or url_for("main.transactions"))
+    if transaction.splits and amount != transaction.amount:
+        flash("Update the split amounts before changing this transaction total.", "error")
+        return redirect(request.referrer or url_for("main.transactions"))
     selected = {int(value) for value in request.form.getlist("apply_to")}
     selected.add(transaction.id)
     targets = Transaction.query.filter(Transaction.id.in_(selected), Transaction.deleted_at.is_(None)).all()
@@ -243,15 +255,21 @@ def edit_transaction(transaction_id):
     }
     transaction.is_reimbursement = request.form.get("is_reimbursement") == "on"
     transaction.reimbursement_for_id = request.form.get("reimbursement_for_id", type=int)
+    transaction.amount = amount
+    for budget_item in BudgetItem.query.filter_by(transaction_id=transaction.id).all():
+        budget_item.actual_amount = amount
     for target in targets:
         for name, value in fields.items():
             setattr(target, name, value)
+        audit_detail = fields.copy()
+        if target.id == transaction.id:
+            audit_detail["amount"] = str(amount)
         db.session.add(
             AuditRecord(
                 entity_type="transaction",
                 entity_id=target.id,
                 action="edit",
-                detail=json.dumps(fields),
+                detail=json.dumps(audit_detail),
             )
         )
         template = RecurringTemplate.query.filter_by(
@@ -259,6 +277,8 @@ def edit_transaction(transaction_id):
         ).first()
         if template:
             template.description = target.display_description
+            if target.id == transaction.id:
+                template.amount = amount
             template.transaction_type = target.transaction_type
             template.parent_category = target.parent_category
             template.subcategory = target.subcategory
@@ -683,19 +703,21 @@ def import_confirm():
     imported = 0
     duplicates = 0
     current = month_start()
+    initial_import = Transaction.query.count() == 0 and ImportBatch.query.count() == 1
     for row in payload["rows"]:
         if row["duplicate"] or duplicate_exists(row):
             duplicates += 1
             continue
         bank_date = date.fromisoformat(row["bank_date"])
         row_month = month_start(bank_date)
-        closed = MonthRecord.query.filter_by(month=row_month, closed=True).first()
-        if not closed and not MonthRecord.query.filter_by(month=row_month).first():
-            db.session.add(MonthRecord(month=row_month, closed=row_month < current))
+        month_record = MonthRecord.query.filter_by(month=row_month).first()
+        closed = month_record.closed if month_record else row_month < current
+        if not month_record:
+            db.session.add(MonthRecord(month=row_month, closed=closed))
         db.session.add(
             Transaction(
                 bank_date=bank_date,
-                budget_month=current if closed else row_month,
+                budget_month=current if closed and not initial_import else row_month,
                 amount=Decimal(row["amount"]),
                 bank_description=row["description"],
                 import_batch_id=batch.id,

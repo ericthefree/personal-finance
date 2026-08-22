@@ -48,6 +48,31 @@ def test_initial_import_preview_and_confirmation(app, client):
         assert BalanceCheckpoint.query.one().balance == Decimal("4118.30")
 
 
+def test_initial_import_keeps_historical_transactions_in_their_month(app, client):
+    csv_data = b"Date,Amount,Description\n3/21/2025,-10,Older one\n3/22/2025,-20,Older two\n"
+    response = client.post(
+        "/admin/import/preview",
+        data={"csv_file": (io.BytesIO(csv_data), "history.csv")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 200
+    preview = max(
+        Path(app.instance_path, "import_previews").glob("*.json"),
+        key=lambda path: path.stat().st_mtime,
+    )
+
+    response = client.post(
+        "/admin/import/confirm",
+        data={"token": preview.stem, "initial_balance": "100"},
+    )
+
+    assert response.status_code == 302
+    with app.app_context():
+        assert {transaction.budget_month for transaction in Transaction.query.all()} == {
+            date(2025, 3, 1)
+        }
+
+
 def test_duplicate_import_is_discarded(app, client):
     with app.app_context():
         transaction = Transaction(
@@ -81,6 +106,28 @@ def test_transaction_delete_is_soft_delete(app, client):
     assert response.status_code == 302
     with app.app_context():
         assert db.session.get(Transaction, transaction_id).deleted_at is not None
+
+
+def test_transaction_amount_can_be_corrected(app, client):
+    with app.app_context():
+        transaction = Transaction(
+            bank_date=date.today(),
+            budget_month=date.today().replace(day=1),
+            amount=25,
+            bank_description="Mistyped expense",
+        )
+        db.session.add(transaction)
+        db.session.commit()
+        transaction_id = transaction.id
+
+    response = client.post(
+        f"/transactions/{transaction_id}/edit",
+        data={"amount": "-25.00", "custom_description": "Mistyped expense"},
+    )
+
+    assert response.status_code == 302
+    with app.app_context():
+        assert db.session.get(Transaction, transaction_id).amount == Decimal("-25.00")
 
 
 def test_recurring_split_creates_budget_and_can_be_matched(app, client):

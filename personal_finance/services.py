@@ -114,11 +114,16 @@ def available_balance(month=None, base_balance=None):
 
 
 def monthly_spending(month=None):
+    return monthly_activity(month)["expenses"]
+
+
+def monthly_activity(month=None):
     month = month or month_start()
     transactions = Transaction.query.filter_by(budget_month=month).filter(
         Transaction.deleted_at.is_(None)
     )
-    total = Decimal("0")
+    income = Decimal("0")
+    expenses = Decimal("0")
     for transaction in transactions:
         entries = transaction.splits or [transaction]
         for entry in entries:
@@ -126,10 +131,12 @@ def monthly_spending(month=None):
             if entry.transaction_type == "Transfers":
                 continue
             if amount < 0:
-                total += abs(amount)
+                expenses += abs(amount)
             elif entry.is_reimbursement and entry.reimbursement_for_id:
-                total -= amount
-    return total
+                expenses -= amount
+            elif amount > 0 and not entry.is_reimbursement:
+                income += amount
+    return {"income": income, "expenses": expenses}
 
 
 def normalize_header(value):

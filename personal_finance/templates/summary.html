@@ -12,9 +12,13 @@
 </section>
 
 <section class="metric-grid" aria-label="Monthly summary">
+  <article class="metric-card" tabindex="0" title="Credits excluding transfers and linked reimbursements">
+    <span>Income</span><strong class="positive-text">{{ activity.income|currency }}</strong>
+    <small>{{ selected_month.strftime('%B') }} credits</small>
+  </article>
   <article class="metric-card" tabindex="0" title="Debits excluding transfers, less linked reimbursements">
-    <span>Monthly spending</span><strong>{{ spending|currency }}</strong>
-    <small>Net of reimbursements</small>
+    <span>Expenses</span><strong class="negative-text">{{ activity.expenses|currency }}</strong>
+    <small>{{ selected_month.strftime('%B') }}, net of reimbursements</small>
   </article>
   <article class="metric-card" tabindex="0" title="The latest balance checkpoint plus subsequently imported transactions">
     <span>Checking balance</span><strong>{{ balance|currency }}</strong>
@@ -28,6 +32,14 @@
     <span>Remaining items</span><strong>{{ remaining|length }}</strong>
     <small>{{ totals.debits|currency }} total budgeted debits</small>
   </article>
+</section>
+
+<section class="panel">
+  <div class="panel-heading"><div><p class="eyebrow">Prior month</p><h2>{{ previous_month.strftime('%B %Y') }} activity</h2></div><a href="{{ url_for('main.summary', month=previous_month.strftime('%Y-%m')) }}">View month</a></div>
+  <div class="mini-metrics prior-activity">
+    <div><span>Income</span><strong class="positive-text">{{ previous_activity.income|currency }}</strong></div>
+    <div><span>Expenses</span><strong class="negative-text">{{ previous_activity.expenses|currency }}</strong></div>
+  </div>
 </section>
 
 <section class="dashboard-grid">
