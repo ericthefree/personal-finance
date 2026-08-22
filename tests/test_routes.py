@@ -155,6 +155,46 @@ def test_transaction_amount_can_be_corrected(app, client):
         assert db.session.get(Transaction, transaction_id).amount == Decimal("-25.00")
 
 
+def test_transaction_matches_include_same_bank_description_with_different_amounts(app, client):
+    with app.app_context():
+        selected = Transaction(
+            bank_date=date(2026, 8, 15),
+            budget_month=date(2026, 8, 1),
+            amount=2000,
+            bank_description="CONCUR TECHNOLOGPAYMENTS",
+        )
+        db.session.add_all(
+            [
+                selected,
+                Transaction(
+                    bank_date=date(2026, 7, 31),
+                    budget_month=date(2026, 7, 1),
+                    amount=1900,
+                    bank_description="CONCUR TECHNOLOGPAYMENTS",
+                ),
+                Transaction(
+                    bank_date=date(2026, 7, 15),
+                    budget_month=date(2026, 7, 1),
+                    amount=2050,
+                    bank_description="CONCUR TECHNOLOGPAYMENTS",
+                ),
+                Transaction(
+                    bank_date=date(2026, 7, 15),
+                    budget_month=date(2026, 7, 1),
+                    amount=2000,
+                    bank_description="Different deposit",
+                ),
+            ]
+        )
+        db.session.commit()
+        transaction_id = selected.id
+
+    response = client.get(f"/transactions/{transaction_id}/matches")
+
+    assert response.status_code == 200
+    assert [match["amount"] for match in response.json["matches"]] == ["$1,900.00", "$2,050.00"]
+
+
 def test_recurring_transaction_edits_update_open_budget_item(app, client):
     with app.app_context():
         transaction = Transaction(

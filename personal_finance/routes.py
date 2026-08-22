@@ -254,7 +254,6 @@ def transaction_matches(transaction_id):
         Transaction.id != transaction.id,
         Transaction.deleted_at.is_(None),
         Transaction.bank_description == transaction.bank_description,
-        Transaction.amount == transaction.amount,
     ).order_by(Transaction.bank_date.desc()).all()
     return {
         "matches": [
