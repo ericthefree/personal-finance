@@ -282,6 +282,19 @@ def edit_transaction(transaction_id):
             template.transaction_type = target.transaction_type
             template.parent_category = target.parent_category
             template.subcategory = target.subcategory
+            template.is_reimbursement = target.is_reimbursement
+            for budget_item in BudgetItem.query.filter_by(
+                recurring_template_id=template.id
+            ).all():
+                month_record = MonthRecord.query.filter_by(month=budget_item.month).first()
+                if month_record and month_record.closed:
+                    continue
+                budget_item.description = template.description
+                budget_item.amount = template.amount
+                budget_item.transaction_type = template.transaction_type
+                budget_item.parent_category = template.parent_category
+                budget_item.subcategory = template.subcategory
+                budget_item.is_reimbursement = template.is_reimbursement
     db.session.commit()
     flash(f"Updated {len(targets)} transaction(s).", "success")
     return redirect(request.referrer or url_for("main.transactions"))

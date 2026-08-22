@@ -130,6 +130,39 @@ def test_transaction_amount_can_be_corrected(app, client):
         assert db.session.get(Transaction, transaction_id).amount == Decimal("-25.00")
 
 
+def test_recurring_transaction_edits_update_open_budget_item(app, client):
+    with app.app_context():
+        transaction = Transaction(
+            bank_date=date.today(),
+            budget_month=date.today().replace(day=1),
+            amount=-25,
+            bank_description="Original bank description",
+        )
+        db.session.add(transaction)
+        db.session.commit()
+        transaction_id = transaction.id
+
+    response = client.post(
+        f"/transactions/{transaction_id}/recurring",
+        data={"enabled": "true", "interval": "1"},
+    )
+    assert response.status_code == 200
+
+    response = client.post(
+        f"/transactions/{transaction_id}/edit",
+        data={"amount": "-25.00", "custom_description": "Updated description"},
+    )
+
+    assert response.status_code == 302
+    with app.app_context():
+        template = RecurringTemplate.query.filter_by(
+            created_from_transaction_id=transaction_id
+        ).one()
+        item = BudgetItem.query.filter_by(recurring_template_id=template.id).one()
+        assert template.description == "Updated description"
+        assert item.description == "Updated description"
+
+
 def test_recurring_split_creates_budget_and_can_be_matched(app, client):
     with app.app_context():
         transaction = Transaction(
