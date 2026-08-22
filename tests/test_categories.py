@@ -30,6 +30,9 @@ def test_category_page_and_add_complete_path(app, client):
     response = client.get("/admin/categories")
     assert response.status_code == 200
     assert b"Category management" in response.data
+    assert b'id="existing-category-type"' in response.data
+    assert b'id="existing-category-parent"' in response.data
+    assert b"<datalist" not in response.data
 
     response = client.post(
         "/admin/categories/add",

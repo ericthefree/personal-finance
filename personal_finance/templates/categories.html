@@ -50,13 +50,13 @@
   <form action="{{ url_for('main.add_category') }}" method="post" class="dialog-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="dialog-heading"><h2>Add category</h2><button type="button" class="close-dialog" aria-label="Close">×</button></div>
-    <p class="muted">Enter a complete Type → Parent → Subcategory path. Existing names may be reused.</p>
-    <label>Type<input name="transaction_type" list="category-types" maxlength="40" required></label>
-    <label>Parent<input name="parent" list="category-parents" maxlength="80" required></label>
+    <p class="muted">Choose existing names or enter new ones to create a complete Type → Parent → Subcategory path.</p>
+    <label>Use existing type<select id="existing-category-type"><option value="">Create a new type…</option>{% for type_name in grouped_categories %}<option value="{{ type_name }}">{{ type_name }}</option>{% endfor %}</select></label>
+    <label>Type name<input id="new-category-type" name="transaction_type" maxlength="40" required></label>
+    <label>Use existing parent<select id="existing-category-parent" disabled><option value="">Choose an existing type first…</option></select></label>
+    <label>Parent name<input id="new-category-parent" name="parent" maxlength="80" required></label>
     <label>Subcategory<input name="subcategory" maxlength="80" required></label>
     <label>Reporting group<select name="reporting_group" required>{% for value, label in reporting_groups.items() %}<option value="{{ value }}">{{ label }}</option>{% endfor %}</select></label>
-    <datalist id="category-types">{% for type_name in grouped_categories %}<option value="{{ type_name }}">{% endfor %}</datalist>
-    <datalist id="category-parents">{% for parents in grouped_categories.values() %}{% for parent_name in parents %}<option value="{{ parent_name }}">{% endfor %}{% endfor %}</datalist>
     <div class="dialog-actions"><button type="button" class="button close-dialog">Cancel</button><button class="button primary">Add category</button></div>
   </form>
 </dialog>
@@ -70,4 +70,5 @@
     <div class="dialog-actions"><button type="button" class="button close-dialog">Cancel</button><button class="button primary danger-action">Replace and delete</button></div>
   </form>
 </dialog>
+<script id="category-data" type="application/json">{{ category_tree|tojson }}</script>
 {% endblock %}

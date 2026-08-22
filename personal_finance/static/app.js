@@ -60,13 +60,47 @@ document.addEventListener("DOMContentLoaded", () => {
     select._refreshScrollableMenu?.();
   }
 
-  let openScrollableMenu = null;
-  function closeScrollableMenu() {
-    if (!openScrollableMenu) return;
-    openScrollableMenu.menu.hidden = true;
-    openScrollableMenu.button.setAttribute("aria-expanded", "false");
-    openScrollableMenu = null;
+  const categoryPicker = document.createElement("dialog");
+  categoryPicker.className = "category-picker-dialog";
+  categoryPicker.innerHTML = `
+    <div class="category-picker-heading">
+      <h2>Choose category</h2>
+      <button type="button" aria-label="Close">×</button>
+    </div>
+    <div class="category-picker-options" role="listbox"></div>
+    <div class="category-picker-controls">
+      <button type="button">▲ Scroll up</button>
+      <button type="button">▼ Scroll down</button>
+    </div>`;
+  document.body.append(categoryPicker);
+  const pickerTitle = categoryPicker.querySelector("h2");
+  const pickerOptions = categoryPicker.querySelector(".category-picker-options");
+  const [pickerUp, pickerDown] = categoryPicker.querySelectorAll(".category-picker-controls button");
+  let activeCategoryPicker = null;
+
+  function updatePickerControls() {
+    pickerUp.disabled = pickerOptions.scrollTop <= 0;
+    pickerDown.disabled = pickerOptions.scrollTop + pickerOptions.clientHeight >= pickerOptions.scrollHeight - 1;
   }
+  [pickerUp, pickerDown].forEach((control, index) => {
+    control.addEventListener("click", () => {
+      pickerOptions.scrollBy({ top: index ? 180 : -180, behavior: "smooth" });
+    });
+  });
+  pickerOptions.addEventListener("scroll", updatePickerControls);
+  function closeCategoryPicker() {
+    activeCategoryPicker?.button.setAttribute("aria-expanded", "false");
+    activeCategoryPicker = null;
+    if (categoryPicker.open) categoryPicker.close();
+  }
+  categoryPicker.querySelector(".category-picker-heading button").addEventListener("click", closeCategoryPicker);
+  categoryPicker.addEventListener("click", (event) => {
+    if (event.target === categoryPicker) closeCategoryPicker();
+  });
+  categoryPicker.addEventListener("close", () => {
+    activeCategoryPicker?.button.setAttribute("aria-expanded", "false");
+    activeCategoryPicker = null;
+  });
 
   function enhanceScrollableSelect(select) {
     if (select.dataset.scrollableSelect === "true") return;
@@ -83,79 +117,38 @@ document.addEventListener("DOMContentLoaded", () => {
     button.setAttribute("aria-haspopup", "listbox");
     button.setAttribute("aria-expanded", "false");
     button.setAttribute("aria-label", select.getAttribute("aria-label") || "Choose an option");
-    const menu = document.createElement("div");
-    menu.className = "scrollable-select-menu";
-    menu.hidden = true;
-    const optionsList = document.createElement("div");
-    optionsList.className = "scrollable-select-options";
-    optionsList.setAttribute("role", "listbox");
-    const controls = document.createElement("div");
-    controls.className = "scrollable-select-controls";
-    const scrollUp = document.createElement("button");
-    scrollUp.type = "button";
-    scrollUp.textContent = "▲ Scroll up";
-    const scrollDown = document.createElement("button");
-    scrollDown.type = "button";
-    scrollDown.textContent = "▼ Scroll down";
-    controls.append(scrollUp, scrollDown);
-    menu.append(optionsList, controls);
-    wrapper.append(button, menu);
-
-    const updateScrollControls = () => {
-      scrollUp.disabled = optionsList.scrollTop <= 0;
-      scrollDown.disabled = optionsList.scrollTop + optionsList.clientHeight >= optionsList.scrollHeight - 1;
-    };
-    [scrollUp, scrollDown].forEach((control, index) => {
-      control.addEventListener("click", (event) => {
-        event.stopPropagation();
-        optionsList.scrollBy({ top: index ? 160 : -160, behavior: "smooth" });
-      });
-    });
-    optionsList.addEventListener("scroll", updateScrollControls);
+    wrapper.append(button);
 
     const rebuild = () => {
       const selected = select.options[select.selectedIndex];
       button.textContent = selected?.textContent || "Choose…";
-      optionsList.innerHTML = "";
+    };
+    select._refreshScrollableMenu = rebuild;
+    button.addEventListener("click", () => {
+      if (categoryPicker.open) categoryPicker.close();
+      activeCategoryPicker = { select, button };
+      pickerTitle.textContent = `Choose ${select.getAttribute("aria-label") || "category"}`;
+      pickerOptions.innerHTML = "";
       [...select.options].forEach((option) => {
         const item = document.createElement("button");
         item.type = "button";
-        item.className = "scrollable-select-option";
+        item.className = "category-picker-option";
         item.textContent = option.textContent;
         item.setAttribute("role", "option");
         item.setAttribute("aria-selected", String(option.selected));
-        item.addEventListener("click", (event) => {
-          event.stopPropagation();
+        item.addEventListener("click", () => {
           select.value = option.value;
           select.dispatchEvent(new Event("change", { bubbles: true }));
           rebuild();
-          closeScrollableMenu();
+          closeCategoryPicker();
           button.focus();
         });
-        optionsList.append(item);
+        pickerOptions.append(item);
       });
-      requestAnimationFrame(updateScrollControls);
-    };
-    select._refreshScrollableMenu = rebuild;
-    button.addEventListener("click", (event) => {
-      event.stopPropagation();
-      const alreadyOpen = openScrollableMenu?.select === select;
-      closeScrollableMenu();
-      if (alreadyOpen) return;
-      const bounds = button.getBoundingClientRect();
-      const menuWidth = Math.min(Math.max(bounds.width, 180), window.innerWidth - 16);
-      menu.style.left = `${Math.min(bounds.left, window.innerWidth - menuWidth - 8)}px`;
-      menu.style.top = `${bounds.bottom + 4}px`;
-      menu.style.width = `${menuWidth}px`;
-      menu.hidden = false;
-      const menuHeight = menu.offsetHeight;
-      if (bounds.bottom + menuHeight + 4 > window.innerHeight) {
-        menu.style.top = `${Math.max(8, bounds.top - menuHeight - 4)}px`;
-      }
       button.setAttribute("aria-expanded", "true");
-      openScrollableMenu = { select, button, menu };
-      optionsList.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
-      updateScrollControls();
+      categoryPicker.showModal();
+      pickerOptions.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+      updatePickerControls();
     });
     rebuild();
   }
@@ -176,15 +169,23 @@ document.addEventListener("DOMContentLoaded", () => {
     updateParents();
     [typeSelect, parent, sub].forEach(enhanceScrollableSelect);
   }
-  document.addEventListener("click", closeScrollableMenu);
-  window.addEventListener("scroll", (event) => {
-    if (!openScrollableMenu?.menu.contains(event.target)) closeScrollableMenu();
-  }, true);
-  window.addEventListener("resize", closeScrollableMenu);
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closeScrollableMenu();
-  });
   document.querySelectorAll(".category-type").forEach(initializeCategoryGroup);
+
+  const existingType = document.querySelector("#existing-category-type");
+  const existingParent = document.querySelector("#existing-category-parent");
+  if (existingType && existingParent) {
+    const typeName = document.querySelector("#new-category-type");
+    const parentName = document.querySelector("#new-category-parent");
+    existingType.addEventListener("change", () => {
+      typeName.value = existingType.value;
+      fillSelect(existingParent, Object.keys(categories[existingType.value] || {}), "Choose existing parent…", "");
+      existingParent.disabled = !existingType.value;
+      parentName.value = "";
+    });
+    existingParent.addEventListener("change", () => {
+      parentName.value = existingParent.value;
+    });
+  }
 
   document.querySelectorAll(".recurring-toggle").forEach((checkbox) => {
     const saveRecurring = async () => {
