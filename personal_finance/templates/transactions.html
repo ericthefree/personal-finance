@@ -1,5 +1,14 @@
 {% extends "base.html" %}
 {% from "_category_fields.html" import category_fields with context %}
+{% macro pagination_controls(position) %}
+  {% if pagination.pages > 1 %}
+  <nav class="pagination {{ position }}-pagination" aria-label="Transaction pages {{ position }}">
+    <span class="pagination-action">{% if pagination.has_prev %}<a class="button" href="{{ url_for('main.transactions', page=pagination.prev_num, q=query_text, sort=sort, direction=direction) }}">← Previous</a>{% endif %}</span>
+    <span>Page {{ pagination.page }} of {{ pagination.pages }}</span>
+    <span class="pagination-action">{% if pagination.has_next %}<a class="button" href="{{ url_for('main.transactions', page=pagination.next_num, q=query_text, sort=sort, direction=direction) }}">Next →</a>{% endif %}</span>
+  </nav>
+  {% endif %}
+{% endmacro %}
 {% block title %}Transactions · Personal Finance{% endblock %}
 {% block content %}
 <section class="page-heading">
@@ -17,6 +26,8 @@
   </label>
   <button class="button" type="submit">Search</button>
 </form>
+
+{{ pagination_controls('top') }}
 
 <div class="table-panel transaction-table-wrap">
   <table class="data-table transaction-table">
@@ -53,13 +64,7 @@
   </table>
 </div>
 
-{% if pagination.pages > 1 %}
-<nav class="pagination" aria-label="Transaction pages">
-  {% if pagination.has_prev %}<a href="{{ url_for('main.transactions', page=pagination.prev_num, q=query_text, sort=sort, direction=direction) }}">← Previous</a>{% endif %}
-  <span>Page {{ pagination.page }} of {{ pagination.pages }}</span>
-  {% if pagination.has_next %}<a href="{{ url_for('main.transactions', page=pagination.next_num, q=query_text, sort=sort, direction=direction) }}">Next →</a>{% endif %}
-</nav>
-{% endif %}
+{{ pagination_controls('bottom') }}
 
 <dialog id="add-transaction">
   <form action="{{ url_for('main.add_transaction') }}" method="post" class="dialog-form">

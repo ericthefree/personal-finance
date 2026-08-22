@@ -53,7 +53,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function fillSelect(select, values, placeholder, selected) {
     select.innerHTML = `<option value="">${placeholder}</option>`;
-    values.forEach((value) => {
+    [...values].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" })).forEach((value) => {
       const option = new Option(value, value, false, value === selected);
       select.add(option);
     });

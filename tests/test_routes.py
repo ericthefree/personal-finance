@@ -22,6 +22,30 @@ def test_main_pages_render(client):
         assert response.status_code == 200
 
 
+def test_transactions_show_fifty_rows_and_pagination_at_both_ends(app, client):
+    with app.app_context():
+        db.session.add_all(
+            [
+                Transaction(
+                    bank_date=date.today(),
+                    budget_month=date.today().replace(day=1),
+                    amount=-index,
+                    bank_description=f"Transaction {index}",
+                )
+                for index in range(1, 52)
+            ]
+        )
+        db.session.commit()
+
+    first_page = client.get("/transactions")
+    second_page = client.get("/transactions?page=2")
+
+    assert first_page.data.count(b'class="transaction-edit-form"') == 50
+    assert first_page.data.count(b'aria-label="Transaction pages ') == 2
+    assert b"Page 1 of 2" in first_page.data
+    assert second_page.data.count(b'class="transaction-edit-form"') == 1
+
+
 def test_initial_import_preview_and_confirmation(app, client):
     csv_data = b"\nChecking account\nDate,Amount,Description,Anything Else\n8/21/2026,-15.85,Market,x\n8/22/2026,4118.3,Payroll,y\n"
     response = client.post(

@@ -66,9 +66,15 @@ def seed_categories():
 
 def category_tree():
     tree = {}
-    for category in Category.query.order_by(
-        Category.transaction_type, Category.parent, Category.subcategory
-    ):
+    categories = sorted(
+        Category.query.all(),
+        key=lambda category: (
+            category.transaction_type.casefold(),
+            category.parent.casefold(),
+            category.subcategory.casefold(),
+        ),
+    )
+    for category in categories:
         tree.setdefault(category.transaction_type, {}).setdefault(category.parent, []).append(
             category.subcategory
         )

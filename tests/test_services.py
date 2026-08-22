@@ -6,12 +6,14 @@ import pytest
 from personal_finance.models import (
     BalanceCheckpoint,
     BudgetItem,
+    Category,
     RecurringTemplate,
     Transaction,
     db,
 )
 from personal_finance.services import (
     available_balance,
+    category_tree,
     current_balance,
     generate_budget_items,
     month_start,
@@ -77,6 +79,24 @@ def test_csv_limits_invalid_row_report():
     assert "95 more invalid rows" in message
     assert "Row 7:" not in message
     assert len(message) < 1_000
+
+
+def test_category_tree_is_sorted_alphabetically_without_case_sensitivity(app):
+    with app.app_context():
+        db.session.add_all(
+            [
+                Category(transaction_type="Test", parent="zebra", subcategory="zulu"),
+                Category(transaction_type="Test", parent="Alpha", subcategory="Zulu"),
+                Category(transaction_type="Test", parent="Alpha", subcategory="apple"),
+            ]
+        )
+        db.session.commit()
+
+        tree = category_tree()
+
+        assert list(tree) == sorted(tree, key=str.casefold)
+        assert list(tree["Test"]) == ["Alpha", "zebra"]
+        assert tree["Test"]["Alpha"] == ["apple", "Zulu"]
 
 
 def test_balance_uses_checkpoint_then_new_signed_transactions(app):

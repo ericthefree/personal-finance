@@ -187,7 +187,7 @@ def transactions():
         )
     sort_column = Transaction.amount if sort == "amount" else Transaction.bank_date
     query = query.order_by((asc if direction == "asc" else desc)(sort_column), Transaction.id.desc())
-    pagination = query.paginate(page=page, per_page=25, error_out=False)
+    pagination = query.paginate(page=page, per_page=50, error_out=False)
     expenses = Transaction.query.filter(
         Transaction.amount < 0, Transaction.deleted_at.is_(None)
     ).order_by(Transaction.bank_date.desc()).limit(200).all()
