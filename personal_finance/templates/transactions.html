@@ -24,7 +24,7 @@
     <tbody>
     {% for transaction in transactions %}
       {% set form_id = 'edit-' ~ transaction.id %}
-      <tr class="{{ 'credit-row' if transaction.amount > 0 else 'debit-row' }}">
+      <tr id="transaction-{{ transaction.id }}" class="{{ 'credit-row' if transaction.amount > 0 else 'debit-row' }}">
         <td data-label="Date"><form id="{{ form_id }}" class="transaction-edit-form" action="{{ url_for('main.edit_transaction', transaction_id=transaction.id) }}" method="post" data-transaction-id="{{ transaction.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"></form>{{ transaction.bank_date|date_us }}</td>
         <td data-label="Custom description"><input class="inline-input" form="{{ form_id }}" name="custom_description" value="{{ transaction.display_description }}" aria-label="Custom description"></td>
         <td data-label="Amount" class="amount-cell"><input class="inline-input signed-amount" form="{{ form_id }}" name="amount" value="{{ transaction.amount }}" inputmode="decimal" aria-label="Signed amount for {{ transaction.display_description }}"></td>

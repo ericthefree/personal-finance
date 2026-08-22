@@ -87,6 +87,11 @@ def require_date_in_month(value, month):
         raise ValueError("Due date must be within the selected budget month.")
 
 
+def transaction_location(transaction_id):
+    page = request.referrer or url_for("main.transactions")
+    return f"{page}#transaction-{transaction_id}"
+
+
 @bp.before_app_request
 def maintain_months():
     ensure_current_month()
@@ -240,10 +245,10 @@ def edit_transaction(transaction_id):
         amount = form_decimal("amount")
     except ValueError as exc:
         flash(str(exc), "error")
-        return redirect(request.referrer or url_for("main.transactions"))
+        return redirect(transaction_location(transaction_id))
     if transaction.splits and amount != transaction.amount:
         flash("Update the split amounts before changing this transaction total.", "error")
-        return redirect(request.referrer or url_for("main.transactions"))
+        return redirect(transaction_location(transaction_id))
     selected = {int(value) for value in request.form.getlist("apply_to")}
     selected.add(transaction.id)
     targets = Transaction.query.filter(Transaction.id.in_(selected), Transaction.deleted_at.is_(None)).all()
@@ -297,7 +302,7 @@ def edit_transaction(transaction_id):
                 budget_item.is_reimbursement = template.is_reimbursement
     db.session.commit()
     flash(f"Updated {len(targets)} transaction(s).", "success")
-    return redirect(request.referrer or url_for("main.transactions"))
+    return redirect(transaction_location(transaction_id))
 
 
 @bp.post("/transactions/<int:transaction_id>/recurring")

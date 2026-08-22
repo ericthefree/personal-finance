@@ -1,4 +1,9 @@
 document.addEventListener("DOMContentLoaded", () => {
+  const savedScrollPosition = sessionStorage.getItem("transaction-scroll-position");
+  if (savedScrollPosition !== null) {
+    sessionStorage.removeItem("transaction-scroll-position");
+    requestAnimationFrame(() => window.scrollTo(0, Number(savedScrollPosition)));
+  }
   const categoryNode = document.querySelector("#category-data");
   const categories = categoryNode ? JSON.parse(categoryNode.textContent) : {};
   const expenseNode = document.querySelector("#expense-data");
@@ -69,7 +74,10 @@ document.addEventListener("DOMContentLoaded", () => {
   let pendingEditForm = null;
   document.querySelectorAll(".transaction-edit-form").forEach((form) => {
     form.addEventListener("submit", async (event) => {
-      if (form.dataset.approved === "true") return;
+      if (form.dataset.approved === "true") {
+        sessionStorage.setItem("transaction-scroll-position", String(window.scrollY));
+        return;
+      }
       event.preventDefault();
       const response = await fetch(`/transactions/${form.dataset.transactionId}/matches`);
       const { matches } = await response.json();

@@ -126,6 +126,7 @@ def test_transaction_amount_can_be_corrected(app, client):
     )
 
     assert response.status_code == 302
+    assert response.location.endswith(f"#transaction-{transaction_id}")
     with app.app_context():
         assert db.session.get(Transaction, transaction_id).amount == Decimal("-25.00")
 
