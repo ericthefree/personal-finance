@@ -67,27 +67,12 @@ document.addEventListener("DOMContentLoaded", () => {
       <h2>Choose category</h2>
       <button type="button" aria-label="Close">×</button>
     </div>
-    <div class="category-picker-options" role="listbox"></div>
-    <div class="category-picker-controls">
-      <button type="button">▲ Scroll up</button>
-      <button type="button">▼ Scroll down</button>
-    </div>`;
+    <div class="category-picker-options" role="listbox"></div>`;
   document.body.append(categoryPicker);
   const pickerTitle = categoryPicker.querySelector("h2");
   const pickerOptions = categoryPicker.querySelector(".category-picker-options");
-  const [pickerUp, pickerDown] = categoryPicker.querySelectorAll(".category-picker-controls button");
   let activeCategoryPicker = null;
 
-  function updatePickerControls() {
-    pickerUp.disabled = pickerOptions.scrollTop <= 0;
-    pickerDown.disabled = pickerOptions.scrollTop + pickerOptions.clientHeight >= pickerOptions.scrollHeight - 1;
-  }
-  [pickerUp, pickerDown].forEach((control, index) => {
-    control.addEventListener("click", () => {
-      pickerOptions.scrollBy({ top: index ? 180 : -180, behavior: "smooth" });
-    });
-  });
-  pickerOptions.addEventListener("scroll", updatePickerControls);
   function closeCategoryPicker() {
     activeCategoryPicker?.button.setAttribute("aria-expanded", "false");
     activeCategoryPicker = null;
@@ -148,7 +133,6 @@ document.addEventListener("DOMContentLoaded", () => {
       button.setAttribute("aria-expanded", "true");
       categoryPicker.showModal();
       pickerOptions.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
-      updatePickerControls();
     });
     rebuild();
   }
