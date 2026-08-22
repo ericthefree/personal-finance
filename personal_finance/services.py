@@ -160,9 +160,10 @@ def parse_csv_upload(raw):
 
     parsed = []
     errors = []
+    error_count = 0
     seen = set()
     for row_number, row in enumerate(reader, start=header_index + 2):
-        if not any((value or "").strip() for value in row.values()):
+        if not any((row.get(headers[name]) or "").strip() for name in required):
             continue
         try:
             bank_date = datetime.strptime(row[headers["date"]].strip(), "%m/%d/%Y").date()
@@ -172,7 +173,9 @@ def parse_csv_upload(raw):
             amount = Decimal(row[headers["amount"]].replace("$", "").replace(",", "").strip())
             amount = amount.quantize(Decimal("0.01"))
         except (ValueError, InvalidOperation, AttributeError) as exc:
-            errors.append(f"Row {row_number}: {exc}")
+            error_count += 1
+            if len(errors) < 5:
+                errors.append(f"Row {row_number}: {str(exc)[:160]}")
             continue
         key = (bank_date.isoformat(), description, str(amount))
         duplicate_in_file = key in seen
@@ -185,8 +188,10 @@ def parse_csv_upload(raw):
                 "duplicate_in_file": duplicate_in_file,
             }
         )
-    if errors:
-        raise ValueError("Import blocked. " + " ".join(errors))
+    if error_count:
+        remaining = error_count - len(errors)
+        suffix = f" ({remaining} more invalid row{'s' if remaining != 1 else ''}.)" if remaining else ""
+        raise ValueError("Import blocked. " + " ".join(errors) + suffix)
     if not parsed:
         raise ValueError("The CSV contains no transaction rows.")
     return parsed

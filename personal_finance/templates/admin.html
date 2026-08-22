@@ -4,7 +4,7 @@
 <section class="page-heading"><div><p class="eyebrow">Data management</p><h1>Admin</h1><p>Import bank activity, reconcile your balance, and keep backups.</p></div></section>
 <section class="admin-grid">
   <article class="panel feature-panel">
-    <div class="feature-icon">↑</div><div><p class="eyebrow">Transactions</p><h2>Upload bank CSV</h2><p>The first two lines are ignored. The complete file is validated before anything is imported.</p></div>
+    <div class="feature-icon">↑</div><div><p class="eyebrow">Transactions</p><h2>Upload bank CSV</h2><p>The header row is detected automatically. The complete file is validated before anything is imported.</p></div>
     <form action="{{ url_for('main.import_preview') }}" method="post" enctype="multipart/form-data" class="stack-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <label class="file-drop"><input type="file" name="csv_file" accept=".csv,text/csv" required><span>Choose a CSV file</span><small>Date, Description, and Amount are required</small></label>

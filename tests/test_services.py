@@ -63,6 +63,21 @@ def test_csv_blocks_entire_file_for_invalid_row():
         parse_csv_upload(raw)
 
 
+def test_csv_limits_invalid_row_report():
+    invalid_rows = "".join(f"bad-date-{index},5,Bad\n" for index in range(100))
+    raw = f"Date,Amount,Description\n{invalid_rows}".encode()
+
+    with pytest.raises(ValueError) as error:
+        parse_csv_upload(raw)
+
+    message = str(error.value)
+    assert "Row 2:" in message
+    assert "Row 6:" in message
+    assert "95 more invalid rows" in message
+    assert "Row 7:" not in message
+    assert len(message) < 1_000
+
+
 def test_balance_uses_checkpoint_then_new_signed_transactions(app):
     with app.app_context():
         db.session.add(BalanceCheckpoint(balance=Decimal("2000"), transaction_cutoff_id=0))
