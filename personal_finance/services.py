@@ -142,18 +142,26 @@ def parse_csv_upload(raw):
     except UnicodeDecodeError as exc:
         raise ValueError("The CSV must use UTF-8 text encoding.") from exc
     lines = text.splitlines()
-    if len(lines) < 3:
-        raise ValueError("The CSV must contain two introductory lines and a header row.")
-    reader = csv.DictReader(io.StringIO("\n".join(lines[2:])))
-    headers = {normalize_header(header): header for header in (reader.fieldnames or [])}
     required = {"date", "description", "amount"}
-    if not required.issubset(headers):
+    header_index = None
+    for index, line in enumerate(lines):
+        try:
+            columns = next(csv.reader([line]))
+        except csv.Error:
+            continue
+        if required.issubset({normalize_header(column) for column in columns}):
+            header_index = index
+            break
+    if header_index is None:
         raise ValueError("The CSV header must include Date, Description, and Amount.")
+
+    reader = csv.DictReader(io.StringIO("\n".join(lines[header_index:])))
+    headers = {normalize_header(header): header for header in (reader.fieldnames or [])}
 
     parsed = []
     errors = []
     seen = set()
-    for row_number, row in enumerate(reader, start=4):
+    for row_number, row in enumerate(reader, start=header_index + 2):
         if not any((value or "").strip() for value in row.values()):
             continue
         try:

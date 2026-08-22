@@ -29,8 +29,9 @@ Open **Admin**, choose the bank CSV, review the preview, and enter the current b
 confirming the first import. The balance is treated as already including every transaction in that
 initial file.
 
-The importer ignores the first two lines and every column except `Date`, `Description`, and
-`Amount`. A typical file looks like:
+The importer finds the header row containing `Date`, `Description`, and `Amount`, regardless of
+whether blank or account-information lines precede it. It ignores every other column. A typical
+file looks like:
 
 ```csv
 

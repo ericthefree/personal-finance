@@ -20,7 +20,7 @@ from personal_finance.services import (
 )
 
 
-def test_csv_skips_two_lines_and_normalizes_amounts():
+def test_csv_finds_header_after_preamble_and_normalizes_amounts():
     raw = b"\nAccount ending 1234\nDate,Amount,Description,Ref. #\n8/21/2026,-2,Coffee,abc\n8/22/2026,4118.3,Salary,def\n"
 
     rows = parse_csv_upload(raw)
@@ -38,6 +38,21 @@ def test_csv_skips_two_lines_and_normalizes_amounts():
             "amount": "4118.30",
             "duplicate_in_file": False,
         },
+    ]
+
+
+def test_csv_accepts_header_as_first_line():
+    raw = b"Date,Amount,Description\n8/21/2026,-2,Coffee\n"
+
+    rows = parse_csv_upload(raw)
+
+    assert rows == [
+        {
+            "bank_date": "2026-08-21",
+            "description": "Coffee",
+            "amount": "-2.00",
+            "duplicate_in_file": False,
+        }
     ]
 
 
