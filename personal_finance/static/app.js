@@ -57,6 +57,107 @@ document.addEventListener("DOMContentLoaded", () => {
       const option = new Option(value, value, false, value === selected);
       select.add(option);
     });
+    select._refreshScrollableMenu?.();
+  }
+
+  let openScrollableMenu = null;
+  function closeScrollableMenu() {
+    if (!openScrollableMenu) return;
+    openScrollableMenu.menu.hidden = true;
+    openScrollableMenu.button.setAttribute("aria-expanded", "false");
+    openScrollableMenu = null;
+  }
+
+  function enhanceScrollableSelect(select) {
+    if (select.dataset.scrollableSelect === "true") return;
+    select.dataset.scrollableSelect = "true";
+    const wrapper = document.createElement("div");
+    wrapper.className = "scrollable-select";
+    select.before(wrapper);
+    wrapper.append(select);
+    select.classList.add("scrollable-select-source");
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "scrollable-select-button";
+    button.setAttribute("aria-haspopup", "listbox");
+    button.setAttribute("aria-expanded", "false");
+    button.setAttribute("aria-label", select.getAttribute("aria-label") || "Choose an option");
+    const menu = document.createElement("div");
+    menu.className = "scrollable-select-menu";
+    menu.hidden = true;
+    const optionsList = document.createElement("div");
+    optionsList.className = "scrollable-select-options";
+    optionsList.setAttribute("role", "listbox");
+    const controls = document.createElement("div");
+    controls.className = "scrollable-select-controls";
+    const scrollUp = document.createElement("button");
+    scrollUp.type = "button";
+    scrollUp.textContent = "▲ Scroll up";
+    const scrollDown = document.createElement("button");
+    scrollDown.type = "button";
+    scrollDown.textContent = "▼ Scroll down";
+    controls.append(scrollUp, scrollDown);
+    menu.append(optionsList, controls);
+    wrapper.append(button, menu);
+
+    const updateScrollControls = () => {
+      scrollUp.disabled = optionsList.scrollTop <= 0;
+      scrollDown.disabled = optionsList.scrollTop + optionsList.clientHeight >= optionsList.scrollHeight - 1;
+    };
+    [scrollUp, scrollDown].forEach((control, index) => {
+      control.addEventListener("click", (event) => {
+        event.stopPropagation();
+        optionsList.scrollBy({ top: index ? 160 : -160, behavior: "smooth" });
+      });
+    });
+    optionsList.addEventListener("scroll", updateScrollControls);
+
+    const rebuild = () => {
+      const selected = select.options[select.selectedIndex];
+      button.textContent = selected?.textContent || "Choose…";
+      optionsList.innerHTML = "";
+      [...select.options].forEach((option) => {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = "scrollable-select-option";
+        item.textContent = option.textContent;
+        item.setAttribute("role", "option");
+        item.setAttribute("aria-selected", String(option.selected));
+        item.addEventListener("click", (event) => {
+          event.stopPropagation();
+          select.value = option.value;
+          select.dispatchEvent(new Event("change", { bubbles: true }));
+          rebuild();
+          closeScrollableMenu();
+          button.focus();
+        });
+        optionsList.append(item);
+      });
+      requestAnimationFrame(updateScrollControls);
+    };
+    select._refreshScrollableMenu = rebuild;
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const alreadyOpen = openScrollableMenu?.select === select;
+      closeScrollableMenu();
+      if (alreadyOpen) return;
+      const bounds = button.getBoundingClientRect();
+      const menuWidth = Math.min(Math.max(bounds.width, 180), window.innerWidth - 16);
+      menu.style.left = `${Math.min(bounds.left, window.innerWidth - menuWidth - 8)}px`;
+      menu.style.top = `${bounds.bottom + 4}px`;
+      menu.style.width = `${menuWidth}px`;
+      menu.hidden = false;
+      const menuHeight = menu.offsetHeight;
+      if (bounds.bottom + menuHeight + 4 > window.innerHeight) {
+        menu.style.top = `${Math.max(8, bounds.top - menuHeight - 4)}px`;
+      }
+      button.setAttribute("aria-expanded", "true");
+      openScrollableMenu = { select, button, menu };
+      optionsList.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+      updateScrollControls();
+    });
+    rebuild();
   }
 
   function initializeCategoryGroup(typeSelect) {
@@ -73,7 +174,16 @@ document.addEventListener("DOMContentLoaded", () => {
     parent.addEventListener("change", () => { sub.dataset.selected = ""; updateSubs(); });
     typeSelect._refreshCategories = updateParents;
     updateParents();
+    [typeSelect, parent, sub].forEach(enhanceScrollableSelect);
   }
+  document.addEventListener("click", closeScrollableMenu);
+  window.addEventListener("scroll", (event) => {
+    if (!openScrollableMenu?.menu.contains(event.target)) closeScrollableMenu();
+  }, true);
+  window.addEventListener("resize", closeScrollableMenu);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeScrollableMenu();
+  });
   document.querySelectorAll(".category-type").forEach(initializeCategoryGroup);
 
   document.querySelectorAll(".recurring-toggle").forEach((checkbox) => {
