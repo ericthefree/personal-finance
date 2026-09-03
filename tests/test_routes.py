@@ -9,6 +9,7 @@ from personal_finance.models import (
     BalanceCheckpoint,
     BudgetItem,
     ImportBatch,
+    MonthRecord,
     RecurringTemplate,
     Transaction,
     TransactionSplit,
@@ -244,6 +245,115 @@ def test_transaction_budget_month_can_be_changed_without_changing_bulk_matches(a
         assert db.session.get(Transaction, selected_id).budget_month == date(2026, 9, 1)
         assert db.session.get(Transaction, match_id).budget_month == date(2026, 8, 1)
         assert db.session.get(Transaction, match_id).custom_description == "Salary"
+
+
+def test_salary_budget_month_change_updates_open_schedule_and_association(app, client):
+    with app.app_context():
+        transaction = Transaction(
+            bank_date=date(2026, 8, 27),
+            budget_month=date(2026, 8, 1),
+            amount=4118.31,
+            bank_description="CONCUR TECHNOLOGPAYMENTS",
+            custom_description="Concur Technologies (Salary)",
+            transaction_type="Income",
+            parent_category="Employment",
+            subcategory="Salary",
+            is_recurring=True,
+        )
+        db.session.add(transaction)
+        db.session.flush()
+        template = RecurringTemplate(
+            description=transaction.display_description,
+            amount=transaction.amount,
+            day_of_month=27,
+            anchor_month=date(2026, 8, 1),
+            interval_months=1,
+            transaction_type="Income",
+            parent_category="Employment",
+            subcategory="Salary",
+            created_from_transaction_id=transaction.id,
+        )
+        db.session.add(template)
+        db.session.flush()
+        august_item = BudgetItem(
+            month=date(2026, 8, 1),
+            due_date=date(2026, 8, 27),
+            description=template.description,
+            amount=template.amount,
+            recurring_template_id=template.id,
+        )
+        september_item = BudgetItem(
+            month=date(2026, 9, 1),
+            due_date=date(2026, 9, 27),
+            description=template.description,
+            amount=template.amount,
+            recurring_template_id=template.id,
+        )
+        db.session.add_all(
+            [august_item, september_item, MonthRecord(month=date(2026, 8, 1), closed=True)]
+        )
+        db.session.commit()
+        transaction_id = transaction.id
+        template_id = template.id
+        august_item_id = august_item.id
+        september_item_id = september_item.id
+
+    response = client.post(
+        f"/transactions/{transaction_id}/edit",
+        data={
+            "amount": "4118.31",
+            "custom_description": "Concur Technologies (Salary)",
+            "transaction_type": "Income",
+            "parent_category": "Employment",
+            "subcategory": "Salary",
+            "budget_month": "2026-09",
+        },
+    )
+
+    assert response.status_code == 302
+    with app.app_context():
+        template = db.session.get(RecurringTemplate, template_id)
+        assert template.anchor_month == date(2026, 9, 1)
+        assert template.day_of_month == 1
+        assert db.session.get(BudgetItem, august_item_id).due_date == date(2026, 8, 27)
+        september_item = db.session.get(BudgetItem, september_item_id)
+        assert september_item.due_date == date(2026, 9, 1)
+        assert september_item.transaction_id == transaction_id
+        assert september_item.actual_amount == Decimal("4118.31")
+
+    budget_page = client.get("/budget?month=2026-09")
+    assert b"Budget date" in budget_page.data
+    assert b"Actual date" in budget_page.data
+    assert b"08-27-2026" in budget_page.data
+
+
+def test_second_half_salary_recurs_on_fifteenth(app, client):
+    with app.app_context():
+        transaction = Transaction(
+            bank_date=date(2026, 9, 12),
+            budget_month=date(2026, 9, 1),
+            amount=4118.31,
+            bank_description="CONCUR TECHNOLOGPAYMENTS",
+            custom_description="Concur Technologies (Salary)",
+            transaction_type="Income",
+            parent_category="Employment",
+            subcategory="Salary",
+        )
+        db.session.add(transaction)
+        db.session.commit()
+        transaction_id = transaction.id
+
+    response = client.post(
+        f"/transactions/{transaction_id}/recurring",
+        data={"enabled": "true", "interval": "1", "create_new": "true"},
+    )
+
+    assert response.status_code == 200
+    with app.app_context():
+        template = RecurringTemplate.query.one()
+        item = BudgetItem.query.one()
+        assert template.day_of_month == 15
+        assert item.due_date == date(2026, 9, 15)
 
 
 def test_transaction_matches_include_same_bank_description_with_different_amounts(app, client):

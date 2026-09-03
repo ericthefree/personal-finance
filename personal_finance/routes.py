@@ -90,6 +90,96 @@ def match_text(value):
     return " ".join((value or "").casefold().split())
 
 
+def recurring_budget_day(transaction):
+    is_salary = (
+        transaction.transaction_type == "Income" and transaction.subcategory == "Salary"
+    ) or "salary" in match_text(transaction.display_description)
+    if not is_salary:
+        return transaction.bank_date.day
+    if transaction.bank_date < transaction.budget_month:
+        return 1
+    if transaction.bank_date.day < 15:
+        return 15
+    return transaction.bank_date.day
+
+
+def sync_recurring_budget_month(transaction, previous_month):
+    if not transaction.is_recurring or transaction.budget_month == previous_month:
+        return
+    template = RecurringTemplate.query.filter_by(
+        created_from_transaction_id=transaction.id,
+        active=True,
+    ).first()
+    if template:
+        template.anchor_month = transaction.budget_month
+        template.day_of_month = recurring_budget_day(transaction)
+        for item in BudgetItem.query.filter_by(recurring_template_id=template.id).filter(
+            BudgetItem.deleted_at.is_(None)
+        ):
+            record = MonthRecord.query.filter_by(month=item.month).first()
+            if not record or not record.closed:
+                item.due_date = due_date_for(item.month, template.day_of_month)
+        item = BudgetItem.query.filter_by(
+            month=transaction.budget_month,
+            recurring_template_id=template.id,
+        ).filter(BudgetItem.deleted_at.is_(None)).first()
+        if not item:
+            item = BudgetItem(
+                month=transaction.budget_month,
+                due_date=due_date_for(transaction.budget_month, template.day_of_month),
+                description=template.description,
+                amount=template.amount,
+                transaction_type=template.transaction_type,
+                parent_category=template.parent_category,
+                subcategory=template.subcategory,
+                is_reimbursement=template.is_reimbursement,
+                recurring_template_id=template.id,
+            )
+            db.session.add(item)
+    else:
+        candidates = []
+        description = match_text(transaction.display_description)
+        for item in BudgetItem.query.filter_by(month=transaction.budget_month).filter(
+            BudgetItem.recurring_template_id.is_not(None),
+            BudgetItem.transaction_id.is_(None),
+            BudgetItem.transaction_split_id.is_(None),
+            BudgetItem.deleted_at.is_(None),
+        ):
+            same_description = match_text(item.description) == description
+            same_category = bool(
+                transaction.parent_category
+                and item.transaction_type == transaction.transaction_type
+                and item.parent_category == transaction.parent_category
+                and (
+                    not transaction.subcategory
+                    or item.subcategory == transaction.subcategory
+                )
+            )
+            if same_description or same_category:
+                candidates.append(item)
+        if not candidates:
+            return
+        candidates.sort(key=lambda item: abs((item.due_date - transaction.bank_date).days))
+        if len(candidates) > 1 and abs(
+            (candidates[0].due_date - transaction.bank_date).days
+        ) == abs((candidates[1].due_date - transaction.bank_date).days):
+            return
+        item = candidates[0]
+
+    for old_item in BudgetItem.query.filter_by(transaction_id=transaction.id).filter(
+        BudgetItem.id != item.id,
+        BudgetItem.deleted_at.is_(None),
+    ):
+        record = MonthRecord.query.filter_by(month=old_item.month).first()
+        if not record or not record.closed:
+            old_item.transaction_id = None
+            old_item.actual_amount = None
+            old_item.paid = False
+    item.transaction_id = transaction.id
+    item.transaction_split_id = None
+    item.actual_amount = transaction.amount
+
+
 def require_date_in_month(value, month):
     if month_start(value) != month:
         raise ValueError("Due date must be within the selected budget month.")
@@ -296,6 +386,7 @@ def transaction_matches(transaction_id):
 @bp.post("/transactions/<int:transaction_id>/edit")
 def edit_transaction(transaction_id):
     transaction = db.get_or_404(Transaction, transaction_id)
+    previous_budget_month = transaction.budget_month
     try:
         amount = form_decimal("amount")
     except ValueError as exc:
@@ -367,6 +458,7 @@ def edit_transaction(transaction_id):
                 budget_item.parent_category = template.parent_category
                 budget_item.subcategory = template.subcategory
                 budget_item.is_reimbursement = template.is_reimbursement
+    sync_recurring_budget_month(transaction, previous_budget_month)
     db.session.commit()
     flash(f"Updated {len(targets)} transaction(s).", "success")
     return redirect(transaction_location(transaction_id))
@@ -404,7 +496,7 @@ def toggle_recurring(transaction_id):
             template = RecurringTemplate(
                 description=transaction.display_description,
                 amount=transaction.amount,
-                day_of_month=transaction.bank_date.day,
+                day_of_month=recurring_budget_day(transaction),
                 anchor_month=transaction.budget_month,
                 interval_months=interval,
                 transaction_type=transaction.transaction_type,
@@ -426,7 +518,7 @@ def toggle_recurring(transaction_id):
             db.session.add(
                 BudgetItem(
                     month=transaction.budget_month,
-                    due_date=due_date_for(transaction.budget_month, transaction.bank_date.day),
+                    due_date=due_date_for(transaction.budget_month, template.day_of_month),
                     description=template.description,
                     amount=template.amount,
                     transaction_type=template.transaction_type,

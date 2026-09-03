@@ -19,11 +19,11 @@
 
 <div class="table-panel">
 <table class="data-table budget-table">
-  <thead><tr><th>Due</th><th>Description</th><th>Type</th><th>Category</th><th class="amount-cell">Budget</th><th class="amount-cell">Actual</th><th>Status</th><th></th></tr></thead>
+  <thead><tr><th>Budget date</th><th>Actual date</th><th>Description</th><th>Type</th><th>Category</th><th class="amount-cell">Budget</th><th class="amount-cell">Actual</th><th>Status</th><th></th></tr></thead>
   <tbody>
   {% for item in items %}
   <tr class="{{ 'paid-row' if item.paid }}">
-    <td data-label="Due">{{ item.due_date|date_us }}</td><td data-label="Description">{{ item.description }}{% if item.recurring_template_id %}<span class="badge">Recurring</span>{% endif %}</td>
+    <td data-label="Budget date">{{ item.due_date|date_us }}</td><td data-label="Actual date">{% if item.transaction %}{{ item.transaction.bank_date|date_us }}{% elif item.transaction_split %}{{ item.transaction_split.transaction.bank_date|date_us }}{% else %}—{% endif %}</td><td data-label="Description">{{ item.description }}{% if item.recurring_template_id %}<span class="badge">Recurring</span>{% endif %}</td>
     <td data-label="Type">{{ item.transaction_type or '—' }}</td><td data-label="Category">{{ item.parent_category or '—' }}{% if item.subcategory %} · {{ item.subcategory }}{% endif %}</td>
     <td data-label="Budget" class="amount-cell">{{ item.amount|currency }}</td><td data-label="Actual" class="amount-cell">{{ item.actual_amount|currency }}</td>
     <td data-label="Status">
@@ -33,7 +33,7 @@
     </td>
     <td>{% if not record or not record.closed %}<button class="icon-button edit-budget mobile-restricted" type="button" data-url="{{ url_for('main.edit_budget_item', item_id=item.id) }}" data-description="{{ item.description }}" data-date="{{ item.due_date.isoformat() }}" data-amount="{{ item.amount }}" data-type="{{ item.transaction_type or '' }}" data-parent="{{ item.parent_category or '' }}" data-subcategory="{{ item.subcategory or '' }}" data-reimbursement="{{ 'true' if item.is_reimbursement else 'false' }}">Edit</button><form action="{{ url_for('main.delete_budget_item', item_id=item.id) }}" method="post" onsubmit="return confirm('Remove this item and disable its future recurrence?')"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="icon-button danger">Delete</button></form>{% endif %}</td>
   </tr>
-  {% else %}<tr><td colspan="8" class="empty-state">No budget items for this month.</td></tr>{% endfor %}
+  {% else %}<tr><td colspan="9" class="empty-state">No budget items for this month.</td></tr>{% endfor %}
   </tbody>
 </table>
 </div>
