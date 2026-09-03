@@ -48,7 +48,7 @@
         <td data-label="Bank description"><span class="bank-description">{{ transaction.bank_description }}</span>{% if transaction.splits %}<span class="badge">{{ transaction.splits|length }} splits</span>{% endif %}</td>
         <td data-label="Recurring">
           <div class="recurring-control">
-            <input type="checkbox" class="recurring-toggle" data-url="{{ url_for('main.toggle_recurring', transaction_id=transaction.id) }}" {{ 'checked' if transaction.is_recurring }} aria-label="Recurring transaction">
+            <input type="checkbox" class="recurring-toggle" data-url="{{ url_for('main.toggle_recurring', transaction_id=transaction.id) }}" data-matches-url="{{ url_for('main.recurring_budget_matches', transaction_id=transaction.id) }}" {{ 'checked' if transaction.is_recurring }} aria-label="Recurring transaction">
             {% set interval = recurring_intervals.get(transaction.id, 1) %}<select class="recurrence-interval" aria-label="Recurrence frequency"><option value="1" {{ 'selected' if interval == 1 }}>Monthly</option><option value="3" {{ 'selected' if interval == 3 }}>Quarterly</option><option value="6" {{ 'selected' if interval == 6 }}>Every 6 months</option><option value="12" {{ 'selected' if interval == 12 }}>Yearly</option></select>
           </div>
         </td>
@@ -87,6 +87,15 @@
     <p>Choose transactions that should receive the same description and categories.</p>
     <div id="match-list" class="check-list"></div>
     <div class="dialog-actions"><button value="cancel" class="button">Only this transaction</button><button id="confirm-bulk" value="default" class="button primary">Update selected</button></div>
+  </form>
+</dialog>
+
+<dialog id="recurring-budget-dialog">
+  <form method="dialog" class="dialog-form">
+    <div class="dialog-heading"><h2>Recurring budget item</h2><button value="cancel" class="close-dialog" aria-label="Close">×</button></div>
+    <p>Similar budget items already exist for this transaction month. Associate this transaction with one, or create a separate recurring budget item.</p>
+    <div id="recurring-budget-list" class="check-list"></div>
+    <div class="dialog-actions"><button value="cancel" class="button">Cancel</button><button value="create" class="button">Create new</button><button value="associate" class="button primary">Associate selected</button></div>
   </form>
 </dialog>
 

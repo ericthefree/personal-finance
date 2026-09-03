@@ -86,6 +86,10 @@ def recurrence_interval(value):
     return interval
 
 
+def match_text(value):
+    return " ".join((value or "").casefold().split())
+
+
 def require_date_in_month(value, month):
     if month_start(value) != month:
         raise ValueError("Due date must be within the selected budget month.")
@@ -379,9 +383,22 @@ def toggle_recurring(transaction_id):
             interval = recurrence_interval(request.form.get("interval", 1))
         except ValueError as exc:
             return {"error": str(exc)}, 400
+        budget_item_id = request.form.get("budget_item_id", type=int)
+        create_new = request.form.get("create_new") == "true"
+        if not budget_item_id and not create_new and not template:
+            return {"error": "Choose an existing budget item or create a new one."}, 400
+        budget_item = None
+        if budget_item_id:
+            budget_item = db.get_or_404(BudgetItem, budget_item_id)
+            if budget_item.deleted_at or budget_item.month != transaction.budget_month:
+                abort(409, "That budget item is not available for this transaction month.")
+            budget_item.transaction_id = transaction.id
+            budget_item.transaction_split_id = None
+            budget_item.actual_amount = transaction.amount
+            if budget_item.recurring_template:
+                template = budget_item.recurring_template
         if template:
             template.active = True
-            template.amount = transaction.amount
             template.interval_months = interval
         else:
             template = RecurringTemplate(
@@ -398,10 +415,18 @@ def toggle_recurring(transaction_id):
             )
             db.session.add(template)
             db.session.flush()
+        if budget_item:
+            budget_item.recurring_template_id = template.id
+        else:
+            budget_item = BudgetItem.query.filter_by(
+                month=transaction.budget_month,
+                recurring_template_id=template.id,
+            ).filter(BudgetItem.deleted_at.is_(None)).first()
+        if not budget_item:
             db.session.add(
                 BudgetItem(
-                    month=month_start(),
-                    due_date=due_date_for(month_start(), transaction.bank_date.day),
+                    month=transaction.budget_month,
+                    due_date=due_date_for(transaction.budget_month, transaction.bank_date.day),
                     description=template.description,
                     amount=template.amount,
                     transaction_type=template.transaction_type,
@@ -414,6 +439,59 @@ def toggle_recurring(transaction_id):
         template.active = False
     db.session.commit()
     return {"ok": True, "enabled": enabled}
+
+
+@bp.get("/transactions/<int:transaction_id>/recurring-matches")
+def recurring_budget_matches(transaction_id):
+    transaction = db.get_or_404(Transaction, transaction_id)
+    description = match_text(request.args.get("description") or transaction.display_description)
+    transaction_type = request.args.get("transaction_type") or transaction.transaction_type
+    parent = request.args.get("parent_category") or transaction.parent_category
+    subcategory = request.args.get("subcategory") or transaction.subcategory
+    budget_month_value = request.args.get("budget_month")
+    try:
+        budget_month = (
+            datetime.strptime(budget_month_value, "%Y-%m").date().replace(day=1)
+            if budget_month_value
+            else transaction.budget_month
+        )
+    except ValueError:
+        return {"error": "Budget month must be a valid month and year."}, 400
+
+    configured = bool(
+        RecurringTemplate.query.filter_by(
+            created_from_transaction_id=transaction.id,
+            active=True,
+        ).first()
+        or BudgetItem.query.filter_by(transaction_id=transaction.id).filter(
+            BudgetItem.recurring_template_id.is_not(None),
+            BudgetItem.deleted_at.is_(None),
+        ).first()
+    )
+    matches = []
+    for item in BudgetItem.query.filter_by(month=budget_month).filter(
+        BudgetItem.deleted_at.is_(None)
+    ):
+        description_matches = description and match_text(item.description) == description
+        category_matches = bool(
+            parent
+            and item.transaction_type == transaction_type
+            and item.parent_category == parent
+            and (not subcategory or item.subcategory == subcategory)
+        )
+        if not description_matches and not category_matches:
+            continue
+        matches.append(
+            {
+                "id": item.id,
+                "date": item.due_date.strftime("%m-%d-%Y"),
+                "description": item.description,
+                "amount": currency(item.amount),
+                "recurring": bool(item.recurring_template_id),
+            }
+        )
+    matches.sort(key=lambda item: item["date"])
+    return {"matches": matches, "configured": configured}
 
 
 @bp.post("/transactions/<int:transaction_id>/delete")
@@ -947,6 +1025,23 @@ def import_confirm():
     imported = 0
     duplicates = 0
     current = month_start()
+    inherited_settings = {}
+    existing_transactions = Transaction.query.filter(
+        Transaction.deleted_at.is_(None)
+    ).order_by(Transaction.bank_date.desc(), Transaction.id.desc())
+    for existing in existing_transactions:
+        key = match_text(existing.bank_description)
+        has_settings = any(
+            (
+                existing.custom_description,
+                existing.transaction_type,
+                existing.parent_category,
+                existing.subcategory,
+                existing.is_recurring,
+            )
+        )
+        if key and has_settings and key not in inherited_settings:
+            inherited_settings[key] = existing
     for row in payload["rows"]:
         if row["duplicate"] or duplicate_exists(row):
             duplicates += 1
@@ -957,12 +1052,18 @@ def import_confirm():
         closed = month_record.closed if month_record else row_month < current
         if not month_record:
             db.session.add(MonthRecord(month=row_month, closed=closed))
+        inherited = inherited_settings.get(match_text(row["description"]))
         db.session.add(
             Transaction(
                 bank_date=bank_date,
                 budget_month=row_month,
                 amount=Decimal(row["amount"]),
                 bank_description=row["description"],
+                custom_description=inherited.custom_description if inherited else None,
+                transaction_type=inherited.transaction_type if inherited else None,
+                parent_category=inherited.parent_category if inherited else None,
+                subcategory=inherited.subcategory if inherited else None,
+                is_recurring=inherited.is_recurring if inherited else False,
                 import_batch_id=batch.id,
             )
         )

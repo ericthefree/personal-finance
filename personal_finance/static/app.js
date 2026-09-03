@@ -171,15 +171,64 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  document.querySelectorAll(".recurring-toggle").forEach((checkbox) => {
-    const saveRecurring = async () => {
+  const recurringDialog = document.querySelector("#recurring-budget-dialog");
+  let pendingRecurring = null;
+  async function saveRecurring(checkbox, options = {}) {
       const interval = checkbox.closest(".recurring-control").querySelector(".recurrence-interval").value;
-      const body = new URLSearchParams({ enabled: String(checkbox.checked), interval, csrf_token: csrfToken });
+      const body = new URLSearchParams({ enabled: String(checkbox.checked), interval, csrf_token: csrfToken, ...options });
       const response = await fetch(checkbox.dataset.url, { method: "POST", body });
-      if (!response.ok) { checkbox.checked = !checkbox.checked; alert("The recurring setting could not be saved."); }
-    };
-    checkbox.addEventListener("change", saveRecurring);
-    checkbox.closest(".recurring-control").querySelector(".recurrence-interval").addEventListener("change", () => { if (checkbox.checked) saveRecurring(); });
+      if (!response.ok) {
+        checkbox.checked = !checkbox.checked;
+        alert("The recurring setting could not be saved.");
+        return false;
+      }
+      return true;
+  }
+  async function configureRecurring(checkbox) {
+    if (!checkbox.checked) { await saveRecurring(checkbox); return; }
+    const row = checkbox.closest("tr");
+    const params = new URLSearchParams({
+      description: row.querySelector('[name="custom_description"]')?.value || "",
+      transaction_type: row.querySelector('[name="transaction_type"]')?.value || "",
+      parent_category: row.querySelector('[name="parent_category"]')?.value || "",
+      subcategory: row.querySelector('[name="subcategory"]')?.value || "",
+      budget_month: row.querySelector('[name="budget_month"]')?.value || "",
+    });
+    const response = await fetch(`${checkbox.dataset.matchesUrl}?${params}`);
+    if (!response.ok) { checkbox.checked = false; alert("Budget items could not be checked."); return; }
+    const { matches, configured } = await response.json();
+    if (configured) { await saveRecurring(checkbox); return; }
+    if (!matches.length) { await saveRecurring(checkbox, { create_new: "true" }); return; }
+    pendingRecurring = checkbox;
+    const list = document.querySelector("#recurring-budget-list");
+    list.innerHTML = "";
+    matches.forEach((match, index) => {
+      const label = document.createElement("label");
+      const radio = document.createElement("input"); radio.type = "radio"; radio.name = "budget_item_id"; radio.value = match.id; radio.checked = index === 0;
+      const date = document.createElement("span"); date.textContent = match.date;
+      const description = document.createElement("span"); description.textContent = `${match.description}${match.recurring ? " · already recurring" : ""}`;
+      const amount = document.createElement("strong"); amount.textContent = match.amount;
+      label.append(radio, date, description, amount);
+      list.append(label);
+    });
+    recurringDialog.showModal();
+  }
+  document.querySelectorAll(".recurring-toggle").forEach((checkbox) => {
+    checkbox.addEventListener("change", () => configureRecurring(checkbox));
+    checkbox.closest(".recurring-control").querySelector(".recurrence-interval").addEventListener("change", () => { if (checkbox.checked) configureRecurring(checkbox); });
+  });
+  recurringDialog?.addEventListener("close", async () => {
+    if (!pendingRecurring) return;
+    const checkbox = pendingRecurring;
+    pendingRecurring = null;
+    if (recurringDialog.returnValue === "create") {
+      await saveRecurring(checkbox, { create_new: "true" });
+    } else if (recurringDialog.returnValue === "associate") {
+      const selected = recurringDialog.querySelector('[name="budget_item_id"]:checked');
+      await saveRecurring(checkbox, { budget_item_id: selected.value });
+    } else {
+      checkbox.checked = false;
+    }
   });
 
   document.querySelectorAll("[data-paid-url]").forEach((checkbox) => {

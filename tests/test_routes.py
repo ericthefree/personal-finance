@@ -300,7 +300,7 @@ def test_recurring_transaction_edits_update_open_budget_item(app, client):
 
     response = client.post(
         f"/transactions/{transaction_id}/recurring",
-        data={"enabled": "true", "interval": "1"},
+        data={"enabled": "true", "interval": "1", "create_new": "true"},
     )
     assert response.status_code == 200
 
@@ -366,6 +366,129 @@ def test_recurring_split_creates_budget_and_can_be_matched(app, client):
         item = db.session.get(BudgetItem, item_id)
         assert item.paid
         assert item.actual_amount == Decimal("-40.00")
+
+
+def test_import_inherits_matching_transaction_metadata(app, client):
+    with app.app_context():
+        db.session.add(
+            Transaction(
+                bank_date=date(2026, 8, 15),
+                budget_month=date(2026, 8, 1),
+                amount=2000,
+                bank_description="CONCUR TECHNOLOGPAYMENTS",
+                custom_description="Salary",
+                transaction_type="Income",
+                parent_category="Employment",
+                subcategory="Salary",
+                is_recurring=True,
+            )
+        )
+        db.session.add(BalanceCheckpoint(balance=2000, transaction_cutoff_id=1))
+        db.session.commit()
+    response = client.post(
+        "/admin/import/preview",
+        data={
+            "csv_file": (
+                io.BytesIO(
+                    b"Date,Amount,Description\n9/1/2026,1950,  concur technologpayments  \n"
+                ),
+                "new.csv",
+            )
+        },
+        content_type="multipart/form-data",
+    )
+    preview = max(
+        Path(app.instance_path, "import_previews").glob("*.json"),
+        key=lambda path: path.stat().st_mtime,
+    )
+
+    response = client.post("/admin/import/confirm", data={"token": preview.stem})
+
+    assert response.status_code == 302
+    with app.app_context():
+        imported = Transaction.query.filter_by(amount=1950).one()
+        assert imported.custom_description == "Salary"
+        assert imported.transaction_type == "Income"
+        assert imported.parent_category == "Employment"
+        assert imported.subcategory == "Salary"
+        assert imported.is_recurring
+
+
+def test_recurring_transaction_can_associate_existing_budget_item_without_duplicate(app, client):
+    month = date.today().replace(day=1)
+    with app.app_context():
+        transaction = Transaction(
+            bank_date=date.today(),
+            budget_month=month,
+            amount=-125,
+            bank_description="Internet provider",
+            custom_description="Internet",
+            transaction_type="Bills",
+            parent_category="Utilities",
+            subcategory="Internet",
+        )
+        budget_item = BudgetItem(
+            month=month,
+            due_date=date.today(),
+            description="Internet",
+            amount=-120,
+            transaction_type="Bills",
+            parent_category="Utilities",
+            subcategory="Internet",
+        )
+        db.session.add_all([transaction, budget_item])
+        db.session.commit()
+        transaction_id = transaction.id
+        budget_item_id = budget_item.id
+
+    matches = client.get(
+        f"/transactions/{transaction_id}/recurring-matches",
+        query_string={"description": "Internet", "budget_month": month.strftime("%Y-%m")},
+    )
+    response = client.post(
+        f"/transactions/{transaction_id}/recurring",
+        data={"enabled": "true", "interval": "1", "budget_item_id": budget_item_id},
+    )
+
+    assert matches.status_code == 200
+    assert [item["id"] for item in matches.json["matches"]] == [budget_item_id]
+    assert response.status_code == 200
+    with app.app_context():
+        assert db.session.get(Transaction, transaction_id).is_recurring
+        item = db.session.get(BudgetItem, budget_item_id)
+        assert item.transaction_id == transaction_id
+        assert item.actual_amount == Decimal("-125.00")
+        assert item.recurring_template_id is not None
+        assert BudgetItem.query.count() == 1
+        assert RecurringTemplate.query.count() == 1
+
+
+def test_recurring_create_reuses_its_existing_budget_item(app, client):
+    with app.app_context():
+        transaction = Transaction(
+            bank_date=date.today(),
+            budget_month=date.today().replace(day=1),
+            amount=-50,
+            bank_description="Subscription",
+        )
+        db.session.add(transaction)
+        db.session.commit()
+        transaction_id = transaction.id
+
+    first = client.post(
+        f"/transactions/{transaction_id}/recurring",
+        data={"enabled": "true", "interval": "1", "create_new": "true"},
+    )
+    second = client.post(
+        f"/transactions/{transaction_id}/recurring",
+        data={"enabled": "true", "interval": "1"},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    with app.app_context():
+        assert RecurringTemplate.query.count() == 1
+        assert BudgetItem.query.count() == 1
 
 
 def test_writes_require_csrf_token(app, client):
