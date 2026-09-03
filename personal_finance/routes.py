@@ -46,6 +46,7 @@ from .services import (
     due_date_for,
     duplicate_exists,
     ensure_current_month,
+    generate_budget_items,
     month_start,
     monthly_activity,
     parse_csv_upload,
@@ -264,6 +265,78 @@ def summary():
         totals=budget_totals(month),
         type_totals=type_totals,
         month_records=records,
+    )
+
+
+@bp.route("/cash-flow")
+def cash_flow():
+    selected_month = parse_month(request.args.get("month"))
+    current_month = month_start()
+    record = MonthRecord.query.filter_by(month=selected_month).first()
+    if selected_month >= current_month and (not record or not record.closed):
+        if not record:
+            record = MonthRecord(month=selected_month)
+            db.session.add(record)
+        generate_budget_items(selected_month)
+        db.session.commit()
+
+    items = BudgetItem.query.filter_by(month=selected_month).filter(
+        BudgetItem.deleted_at.is_(None)
+    ).order_by(BudgetItem.due_date, BudgetItem.id).all()
+
+    def period(label, date_range, period_items):
+        def total(paid, incoming):
+            return sum(
+                (
+                    abs(Decimal(item.amount))
+                    for item in period_items
+                    if item.paid == paid and (item.amount > 0) == incoming
+                ),
+                Decimal("0"),
+            )
+
+        return {
+            "label": label,
+            "date_range": date_range,
+            "budget_items": period_items,
+            "incoming_paid": total(True, True),
+            "incoming_remaining": total(False, True),
+            "outgoing_paid": total(True, False),
+            "outgoing_remaining": total(False, False),
+        }
+
+    periods = [
+        period("Period 1", "Days 1–14", [item for item in items if item.due_date.day < 15]),
+        period("Period 2", "Days 15–month end", [item for item in items if item.due_date.day >= 15]),
+    ]
+    transactions = Transaction.query.filter_by(budget_month=selected_month).filter(
+        Transaction.deleted_at.is_(None)
+    ).order_by(Transaction.bank_date.desc(), Transaction.id.desc()).all()
+    balance = current_balance()
+    known_months = {
+        month
+        for (month,) in db.session.query(MonthRecord.month).all()
+    }
+    known_months.update(
+        month for (month,) in db.session.query(Transaction.budget_month).filter(
+            Transaction.deleted_at.is_(None)
+        ).all()
+    )
+    known_months.update(
+        month for (month,) in db.session.query(BudgetItem.month).filter(
+            BudgetItem.deleted_at.is_(None)
+        ).all()
+    )
+    known_months.update({current_month, add_months(current_month, 1)})
+    return render_template(
+        "cash_flow.html",
+        selected_month=selected_month,
+        month_options=sorted(known_months, reverse=True),
+        balance=balance,
+        available=available_balance(selected_month, balance) if balance is not None else None,
+        activity=monthly_activity(selected_month),
+        periods=periods,
+        transactions=transactions,
     )
 
 

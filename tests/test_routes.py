@@ -18,9 +18,126 @@ from personal_finance.models import (
 
 
 def test_main_pages_render(client):
-    for path in ["/", "/transactions", "/budget", "/admin"]:
+    for path in ["/", "/cash-flow", "/transactions", "/budget", "/admin"]:
         response = client.get(path)
         assert response.status_code == 200
+
+
+def test_cash_flow_splits_budget_periods_and_uses_assigned_month(app, client):
+    selected_month = date.today().replace(day=1)
+    previous_month = (
+        date(selected_month.year - 1, 12, 1)
+        if selected_month.month == 1
+        else date(selected_month.year, selected_month.month - 1, 1)
+    )
+    next_month = (
+        date(selected_month.year + 1, 1, 1)
+        if selected_month.month == 12
+        else date(selected_month.year, selected_month.month + 1, 1)
+    )
+    with app.app_context():
+        db.session.add(BalanceCheckpoint(balance=1000, transaction_cutoff_id=0))
+        db.session.add_all(
+            [
+                BudgetItem(
+                    month=selected_month,
+                    due_date=selected_month.replace(day=1),
+                    description="First-period income",
+                    amount=500,
+                    paid=True,
+                ),
+                BudgetItem(
+                    month=selected_month,
+                    due_date=selected_month.replace(day=10),
+                    description="First-period bill",
+                    amount=-100,
+                ),
+                BudgetItem(
+                    month=selected_month,
+                    due_date=selected_month.replace(day=15),
+                    description="Second-period income",
+                    amount=400,
+                ),
+                BudgetItem(
+                    month=selected_month,
+                    due_date=selected_month.replace(day=20),
+                    description="Second-period bill",
+                    amount=-75,
+                    paid=True,
+                ),
+                Transaction(
+                    bank_date=previous_month.replace(day=28),
+                    budget_month=selected_month,
+                    amount=500,
+                    bank_description="Assigned early salary",
+                    transaction_type="Income",
+                    parent_category="Employment",
+                    subcategory="Salary",
+                ),
+                Transaction(
+                    bank_date=selected_month.replace(day=5),
+                    budget_month=selected_month,
+                    amount=-100,
+                    bank_description="Assigned utility",
+                    transaction_type="Bills",
+                    parent_category="Utilities",
+                    subcategory="Electricity",
+                ),
+                Transaction(
+                    bank_date=next_month.replace(day=2),
+                    budget_month=next_month,
+                    amount=-25,
+                    bank_description="Different month transaction",
+                ),
+            ]
+        )
+        db.session.commit()
+
+    response = client.get(f"/cash-flow?month={selected_month:%Y-%m}")
+
+    assert response.status_code == 200
+    page = response.data.decode()
+    assert "Current bank balance" in page
+    assert "Available after budget" in page
+    assert "Period 1" in page and "Days 1–14" in page
+    assert "Period 2" in page and "Days 15–month end" in page
+    assert "First-period income" in page and "$500.00" in page
+    assert "First-period bill" in page and "$100.00" in page
+    assert "Second-period income" in page and "$400.00" in page
+    assert "Second-period bill" in page and "$75.00" in page
+    assert "Assigned early salary" in page
+    assert previous_month.replace(day=28).strftime("%m-%d-%Y") in page
+    assert "Assigned utility" in page
+    assert "Different month transaction" not in page
+    assert f'<option value="{next_month:%Y-%m}"' in page
+
+
+def test_cash_flow_generates_recurring_items_for_next_month(app, client):
+    current_month = date.today().replace(day=1)
+    next_month = (
+        date(current_month.year + 1, 1, 1)
+        if current_month.month == 12
+        else date(current_month.year, current_month.month + 1, 1)
+    )
+    with app.app_context():
+        db.session.add(
+            RecurringTemplate(
+                description="Future rent",
+                amount=-1200,
+                day_of_month=3,
+                anchor_month=current_month,
+                interval_months=1,
+            )
+        )
+        db.session.commit()
+
+    response = client.get(f"/cash-flow?month={next_month:%Y-%m}")
+
+    assert response.status_code == 200
+    assert b"Future rent" in response.data
+    with app.app_context():
+        item = BudgetItem.query.filter_by(month=next_month, description="Future rent").one()
+        assert item.due_date == next_month.replace(day=3)
 
 
 def test_transactions_show_fifty_rows_and_pagination_at_both_ends(app, client):

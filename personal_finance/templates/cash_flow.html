@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Cash Flow · Personal Finance{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <div><p class="eyebrow">Two-period plan</p><h1>{{ selected_month.strftime('%B %Y') }} cash flow</h1><p>See what remains available after each half of the monthly budget.</p></div>
+  <form class="month-picker" method="get">
+    <label for="cash-flow-month">View budget month</label>
+    <select id="cash-flow-month" name="month" onchange="this.form.submit()">
+      {% for month in month_options %}<option value="{{ month.strftime('%Y-%m') }}" {{ 'selected' if month == selected_month }}>{{ month.strftime('%B %Y') }}</option>{% endfor %}
+    </select>
+  </form>
+</section>
+
+<section class="metric-grid" aria-label="Cash flow overview">
+  <article class="metric-card"><span>Current bank balance</span><strong>{{ balance|currency }}</strong><small>Latest calculated checking balance</small></article>
+  <article class="metric-card accent"><span>Available after budget</span><strong>{{ available|currency }}</strong><small>After all remaining {{ selected_month.strftime('%B') }} items</small></article>
+  <article class="metric-card"><span>Income and deposits</span><strong class="positive-text">{{ activity.income|currency }}</strong><small>Transactions assigned to this budget month</small></article>
+  <article class="metric-card"><span>Outgoing and expenses</span><strong class="negative-text">{{ activity.expenses|currency }}</strong><small>Net of reimbursements; transfers excluded</small></article>
+</section>
+
+<section class="cash-flow-periods" aria-label="Budget periods">
+  {% for period in periods %}
+  <article class="panel cash-flow-period">
+    <div class="panel-heading"><div><p class="eyebrow">{{ period.date_range }}</p><h2>{{ period.label }}</h2></div><span>{{ period.budget_items|length }} item{{ '' if period.budget_items|length == 1 else 's' }}</span></div>
+    <div class="period-totals">
+      <div><span>Incoming paid</span><strong class="positive-text">{{ period.incoming_paid|currency }}</strong></div>
+      <div><span>Incoming remaining</span><strong class="positive-text">{{ period.incoming_remaining|currency }}</strong></div>
+      <div><span>Outgoing paid</span><strong class="negative-text">{{ period.outgoing_paid|currency }}</strong></div>
+      <div><span>Outgoing remaining</span><strong class="negative-text">{{ period.outgoing_remaining|currency }}</strong></div>
+    </div>
+    <div class="table-panel period-table-wrap">
+      <table class="data-table period-table">
+        <thead><tr><th>Budget date</th><th>Actual date</th><th>Item</th><th class="amount-cell">Amount</th><th>Status</th></tr></thead>
+        <tbody>
+          {% for item in period.budget_items %}
+          <tr class="{{ 'paid-row' if item.paid }}"><td>{{ item.due_date|date_us }}</td><td>{% if item.transaction %}{{ item.transaction.bank_date|date_us }}{% elif item.transaction_split %}{{ item.transaction_split.transaction.bank_date|date_us }}{% else %}—{% endif %}</td><td>{{ item.description }}</td><td class="amount-cell {{ 'positive-text' if item.amount > 0 else 'negative-text' }}">{{ item.amount|currency }}</td><td><span class="status {{ 'complete' if item.paid }}">{{ 'Paid' if item.paid else 'Remaining' }}</span></td></tr>
+          {% else %}<tr><td colspan="5" class="empty-state">No budget items in this period.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+  {% endfor %}
+</section>
+
+<section class="panel cash-flow-transactions">
+  <div class="panel-heading"><div><p class="eyebrow">Assigned activity</p><h2>{{ selected_month.strftime('%B %Y') }} transactions</h2></div><span>{{ transactions|length }} transaction{{ '' if transactions|length == 1 else 's' }}</span></div>
+  <p class="muted">Includes transactions assigned to this budget month even when their bank date falls in another month.</p>
+  <div class="table-panel cash-flow-transaction-wrap">
+    <table class="data-table cash-flow-transaction-table">
+      <thead><tr><th>Bank date</th><th>Description</th><th>Type</th><th>Category</th><th class="amount-cell">Amount</th><th>Recurring</th></tr></thead>
+      <tbody>
+        {% for transaction in transactions %}
+        <tr class="{{ 'credit-row' if transaction.amount > 0 else 'debit-row' }}"><td>{{ transaction.bank_date|date_us }}</td><td>{{ transaction.display_description }}<small class="bank-description">{{ transaction.bank_description }}</small></td><td>{{ transaction.transaction_type or '—' }}</td><td>{{ transaction.parent_category or '—' }}{% if transaction.subcategory %} · {{ transaction.subcategory }}{% endif %}</td><td class="amount-cell">{{ transaction.amount|currency }}</td><td>{{ 'Yes' if transaction.is_recurring else 'No' }}</td></tr>
+        {% else %}<tr><td colspan="6" class="empty-state">No transactions are assigned to this budget month.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
