@@ -46,6 +46,26 @@ def test_transactions_show_fifty_rows_and_pagination_at_both_ends(app, client):
     assert second_page.data.count(b'class="transaction-edit-form"') == 1
 
 
+def test_transactions_show_budget_months_and_month_after_latest_date(app, client):
+    with app.app_context():
+        db.session.add(
+            Transaction(
+                bank_date=date(2099, 12, 15),
+                budget_month=date(2099, 11, 1),
+                amount=-10,
+                bank_description="Future transaction",
+            )
+        )
+        db.session.commit()
+
+    response = client.get("/transactions")
+
+    assert response.status_code == 200
+    assert b'<option value="2099-11" selected>November 2099</option>' in response.data
+    assert b'<option value="2099-12" >December 2099</option>' in response.data
+    assert b'<option value="2100-01" >January 2100</option>' in response.data
+
+
 def test_initial_import_preview_and_confirmation(app, client):
     csv_data = b"\nChecking account\nDate,Amount,Description,Anything Else\n8/21/2026,-15.85,Market,x\n8/22/2026,4118.3,Payroll,y\n"
     response = client.post(
@@ -116,6 +136,41 @@ def test_duplicate_import_is_discarded(app, client):
     assert b"Duplicate" in response.data
 
 
+def test_later_import_defaults_to_the_transaction_date_month(app, client):
+    with app.app_context():
+        db.session.add(
+            Transaction(
+                bank_date=date.today(),
+                budget_month=date.today().replace(day=1),
+                amount=-1,
+                bank_description="Existing transaction",
+            )
+        )
+        db.session.add(BalanceCheckpoint(balance=100, transaction_cutoff_id=1))
+        db.session.commit()
+    response = client.post(
+        "/admin/import/preview",
+        data={
+            "csv_file": (
+                io.BytesIO(b"Date,Amount,Description\n4/30/2025,2000,Early salary\n"),
+                "later.csv",
+            )
+        },
+        content_type="multipart/form-data",
+    )
+    preview = max(
+        Path(app.instance_path, "import_previews").glob("*.json"),
+        key=lambda path: path.stat().st_mtime,
+    )
+
+    response = client.post("/admin/import/confirm", data={"token": preview.stem})
+
+    assert response.status_code == 302
+    with app.app_context():
+        imported = Transaction.query.filter_by(bank_description="Early salary").one()
+        assert imported.budget_month == date(2025, 4, 1)
+
+
 def test_transaction_delete_is_soft_delete(app, client):
     with app.app_context():
         transaction = Transaction(
@@ -153,6 +208,42 @@ def test_transaction_amount_can_be_corrected(app, client):
     assert response.location.endswith(f"#transaction-{transaction_id}")
     with app.app_context():
         assert db.session.get(Transaction, transaction_id).amount == Decimal("-25.00")
+
+
+def test_transaction_budget_month_can_be_changed_without_changing_bulk_matches(app, client):
+    with app.app_context():
+        selected = Transaction(
+            bank_date=date(2026, 8, 30),
+            budget_month=date(2026, 8, 1),
+            amount=2000,
+            bank_description="Twice-monthly pay",
+        )
+        match = Transaction(
+            bank_date=date(2026, 8, 15),
+            budget_month=date(2026, 8, 1),
+            amount=1900,
+            bank_description="Twice-monthly pay",
+        )
+        db.session.add_all([selected, match])
+        db.session.commit()
+        selected_id = selected.id
+        match_id = match.id
+
+    response = client.post(
+        f"/transactions/{selected_id}/edit",
+        data={
+            "amount": "2000",
+            "custom_description": "Salary",
+            "budget_month": "2026-09",
+            "apply_to": str(match_id),
+        },
+    )
+
+    assert response.status_code == 302
+    with app.app_context():
+        assert db.session.get(Transaction, selected_id).budget_month == date(2026, 9, 1)
+        assert db.session.get(Transaction, match_id).budget_month == date(2026, 8, 1)
+        assert db.session.get(Transaction, match_id).custom_description == "Salary"
 
 
 def test_transaction_matches_include_same_bank_description_with_different_amounts(app, client):

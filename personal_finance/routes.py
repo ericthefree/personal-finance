@@ -188,6 +188,26 @@ def transactions():
     sort_column = Transaction.amount if sort == "amount" else Transaction.bank_date
     query = query.order_by((asc if direction == "asc" else desc)(sort_column), Transaction.id.desc())
     pagination = query.paginate(page=page, per_page=50, error_out=False)
+    transaction_dates = db.session.query(
+        Transaction.bank_date, Transaction.budget_month
+    ).filter(Transaction.deleted_at.is_(None)).all()
+    transaction_months = {
+        month_start(value)
+        for bank_date, budget_month in transaction_dates
+        for value in (bank_date, budget_month)
+        if value
+    }
+    current_month = month_start()
+    latest_bank_date = max(
+        (bank_date for bank_date, _ in transaction_dates),
+        default=None,
+    )
+    latest_month = max(
+        current_month,
+        month_start(latest_bank_date) if latest_bank_date else current_month,
+    )
+    transaction_months.update({current_month, add_months(latest_month, 1)})
+    month_options = sorted(transaction_months, reverse=True)
     expenses = Transaction.query.filter(
         Transaction.amount < 0, Transaction.deleted_at.is_(None)
     ).order_by(Transaction.bank_date.desc()).limit(200).all()
@@ -211,6 +231,7 @@ def transactions():
         query_text=query_text,
         sort=sort,
         direction=direction,
+        month_options=month_options,
         expenses=expenses,
         expense_options=expense_options,
         recurring_intervals=recurring_intervals,
@@ -230,7 +251,7 @@ def add_transaction():
         return redirect(url_for("main.transactions"))
     transaction = Transaction(
         bank_date=bank_date,
-        budget_month=month_start(),
+        budget_month=month_start(bank_date),
         amount=amount,
         bank_description="Manual transaction",
         custom_description=description,
@@ -276,6 +297,16 @@ def edit_transaction(transaction_id):
     except ValueError as exc:
         flash(str(exc), "error")
         return redirect(transaction_location(transaction_id))
+    budget_month_value = request.form.get("budget_month")
+    try:
+        budget_month = (
+            datetime.strptime(budget_month_value, "%Y-%m").date().replace(day=1)
+            if budget_month_value
+            else transaction.budget_month
+        )
+    except ValueError:
+        flash("Budget month must be a valid month and year.", "error")
+        return redirect(transaction_location(transaction_id))
     if transaction.splits and amount != transaction.amount:
         flash("Update the split amounts before changing this transaction total.", "error")
         return redirect(transaction_location(transaction_id))
@@ -291,6 +322,7 @@ def edit_transaction(transaction_id):
     transaction.is_reimbursement = request.form.get("is_reimbursement") == "on"
     transaction.reimbursement_for_id = request.form.get("reimbursement_for_id", type=int)
     transaction.amount = amount
+    transaction.budget_month = budget_month
     for budget_item in BudgetItem.query.filter_by(transaction_id=transaction.id).all():
         budget_item.actual_amount = amount
     for target in targets:
@@ -299,6 +331,7 @@ def edit_transaction(transaction_id):
         audit_detail = fields.copy()
         if target.id == transaction.id:
             audit_detail["amount"] = str(amount)
+            audit_detail["budget_month"] = budget_month.isoformat()
         db.session.add(
             AuditRecord(
                 entity_type="transaction",
@@ -914,7 +947,6 @@ def import_confirm():
     imported = 0
     duplicates = 0
     current = month_start()
-    initial_import = Transaction.query.count() == 0 and ImportBatch.query.count() == 1
     for row in payload["rows"]:
         if row["duplicate"] or duplicate_exists(row):
             duplicates += 1
@@ -928,7 +960,7 @@ def import_confirm():
         db.session.add(
             Transaction(
                 bank_date=bank_date,
-                budget_month=current if closed and not initial_import else row_month,
+                budget_month=row_month,
                 amount=Decimal(row["amount"]),
                 bank_description=row["description"],
                 import_batch_id=batch.id,

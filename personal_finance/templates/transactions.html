@@ -31,12 +31,13 @@
 
 <div class="table-panel transaction-table-wrap">
   <table class="data-table transaction-table">
-    <thead><tr><th>Date</th><th>Custom description</th><th class="amount-cell">Amount</th><th>Type / category</th><th>Bank description</th><th>Recurring</th><th><span class="sr-only">Actions</span></th></tr></thead>
+    <thead><tr><th>Date</th><th>Budget month</th><th>Custom description</th><th class="amount-cell">Amount</th><th>Type / category</th><th>Bank description</th><th>Recurring</th><th><span class="sr-only">Actions</span></th></tr></thead>
     <tbody>
     {% for transaction in transactions %}
       {% set form_id = 'edit-' ~ transaction.id %}
       <tr id="transaction-{{ transaction.id }}" class="{{ 'credit-row' if transaction.amount > 0 else 'debit-row' }}">
         <td data-label="Date"><form id="{{ form_id }}" class="transaction-edit-form" action="{{ url_for('main.edit_transaction', transaction_id=transaction.id) }}" method="post" data-transaction-id="{{ transaction.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"></form>{{ transaction.bank_date|date_us }}</td>
+        <td data-label="Budget month"><select class="budget-month-select" form="{{ form_id }}" name="budget_month" aria-label="Budget month for {{ transaction.display_description }}">{% for month in month_options %}<option value="{{ month.strftime('%Y-%m') }}" {{ 'selected' if month == transaction.budget_month }}>{{ month.strftime('%B %Y') }}</option>{% endfor %}</select></td>
         <td data-label="Custom description"><input class="inline-input" form="{{ form_id }}" name="custom_description" value="{{ transaction.display_description }}" aria-label="Custom description"></td>
         <td data-label="Amount" class="amount-cell"><input class="inline-input signed-amount" form="{{ form_id }}" name="amount" value="{{ transaction.amount }}" inputmode="decimal" aria-label="Signed amount for {{ transaction.display_description }}"></td>
         <td data-label="Category" class="category-stack">
@@ -58,7 +59,7 @@
         </td>
       </tr>
     {% else %}
-      <tr><td colspan="7" class="empty-state">No transactions yet. Add one or upload a CSV from Admin.</td></tr>
+      <tr><td colspan="8" class="empty-state">No transactions yet. Add one or upload a CSV from Admin.</td></tr>
     {% endfor %}
     </tbody>
   </table>
