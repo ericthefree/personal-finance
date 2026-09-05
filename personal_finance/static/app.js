@@ -4,6 +4,11 @@ document.addEventListener("DOMContentLoaded", () => {
     sessionStorage.removeItem("transaction-scroll-position");
     requestAnimationFrame(() => window.scrollTo(0, Number(savedScrollPosition)));
   }
+  const savedBudgetScrollPosition = sessionStorage.getItem("budget-scroll-position");
+  if (savedBudgetScrollPosition !== null) {
+    sessionStorage.removeItem("budget-scroll-position");
+    requestAnimationFrame(() => window.scrollTo(0, Number(savedBudgetScrollPosition)));
+  }
   const categoryNode = document.querySelector("#category-data");
   const categories = categoryNode ? JSON.parse(categoryNode.textContent) : {};
   const expenseNode = document.querySelector("#expense-data");
@@ -189,6 +194,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const row = checkbox.closest("tr");
     const params = new URLSearchParams({
       description: row.querySelector('[name="custom_description"]')?.value || "",
+      amount: row.querySelector('[name="amount"]')?.value || "",
       transaction_type: row.querySelector('[name="transaction_type"]')?.value || "",
       parent_category: row.querySelector('[name="parent_category"]')?.value || "",
       subcategory: row.querySelector('[name="subcategory"]')?.value || "",
@@ -206,7 +212,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const label = document.createElement("label");
       const radio = document.createElement("input"); radio.type = "radio"; radio.name = "budget_item_id"; radio.value = match.id; radio.checked = index === 0;
       const date = document.createElement("span"); date.textContent = match.date;
-      const description = document.createElement("span"); description.textContent = `${match.description}${match.recurring ? " · already recurring" : ""}`;
+      const description = document.createElement("span"); description.textContent = `${match.description}${match.suggested ? " · suggested" : ""}${match.recurring ? " · already recurring" : ""}`;
       const amount = document.createElement("strong"); amount.textContent = match.amount;
       label.append(radio, date, description, amount);
       list.append(label);
@@ -232,15 +238,25 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   document.querySelectorAll("[data-paid-url]").forEach((checkbox) => {
-    checkbox.addEventListener("change", async () => {
-      const row = checkbox.closest("tr");
-      const select = row.querySelector(".transaction-match");
+    const row = checkbox.closest("tr");
+    const select = row.querySelector(".transaction-match");
+    if (select) select.dataset.savedValue = select.value;
+    async function saveBudgetStatus(changedControl) {
+      const previousMatch = select?.dataset.savedValue || "";
       const body = new URLSearchParams({ paid: String(checkbox.checked), transaction_match: select?.value || "", csrf_token: csrfToken });
       const response = await fetch(checkbox.dataset.paidUrl, { method: "POST", body });
-      if (!response.ok) { checkbox.checked = !checkbox.checked; alert("The budget item could not be updated."); return; }
+      if (!response.ok) {
+        if (changedControl === checkbox) checkbox.checked = !checkbox.checked;
+        if (changedControl === select) select.value = previousMatch;
+        alert("The budget item could not be updated.");
+        return;
+      }
+      if (select) select.dataset.savedValue = select.value;
       checkbox.nextElementSibling.textContent = checkbox.checked ? "Paid" : "Mark paid";
       row.classList.toggle("paid-row", checkbox.checked);
-    });
+    }
+    checkbox.addEventListener("change", () => saveBudgetStatus(checkbox));
+    select?.addEventListener("change", () => saveBudgetStatus(select));
   });
 
   let pendingEditForm = null;
@@ -251,14 +267,16 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
       event.preventDefault();
-      const response = await fetch(`/transactions/${form.dataset.transactionId}/matches`);
-      const { matches } = await response.json();
+      const editedAmount = form.closest("tr").querySelector('[name="amount"]')?.value || "";
+      const response = await fetch(`/transactions/${form.dataset.transactionId}/matches?amount=${encodeURIComponent(editedAmount)}`);
+      const { matches, target_amount: targetAmount } = await response.json();
       if (!matches.length) { form.dataset.approved = "true"; form.requestSubmit(); return; }
       pendingEditForm = form;
       const list = document.querySelector("#match-list");
       list.innerHTML = "";
       matches.forEach((match) => {
         const label = document.createElement("label");
+        label.dataset.amountDifference = String(match.amount_difference);
         const checkbox = document.createElement("input"); checkbox.type = "checkbox"; checkbox.value = match.id; checkbox.checked = true;
         const date = document.createElement("span"); date.textContent = match.date;
         const description = document.createElement("span"); description.textContent = match.description;
@@ -266,8 +284,30 @@ document.addEventListener("DOMContentLoaded", () => {
         label.append(checkbox, date, description, amount);
         list.append(label);
       });
+      const amountRange = document.querySelector("#match-amount-range");
+      amountRange.value = "all";
+      const updateMatchFilter = () => {
+        const tolerance = amountRange.value === "all" ? Infinity : Number(amountRange.value);
+        let visible = 0;
+        list.querySelectorAll("label").forEach((label) => {
+          const shown = Number(label.dataset.amountDifference) <= tolerance;
+          label.hidden = !shown;
+          label.querySelector("input").disabled = !shown;
+          if (!shown) label.querySelector("input").checked = false;
+          if (shown) visible += 1;
+        });
+        document.querySelector("#match-count").textContent = `${visible} transaction${visible === 1 ? "" : "s"} shown near ${Number(targetAmount).toLocaleString(undefined, { style: "currency", currency: "USD" })}.`;
+      };
+      amountRange.onchange = updateMatchFilter;
+      updateMatchFilter();
       document.querySelector("#bulk-update-dialog").showModal();
     });
+  });
+  document.querySelector("#select-all-matches")?.addEventListener("click", () => {
+    document.querySelectorAll("#match-list label:not([hidden]) input").forEach((checkbox) => { checkbox.checked = true; });
+  });
+  document.querySelector("#deselect-all-matches")?.addEventListener("click", () => {
+    document.querySelectorAll("#match-list input").forEach((checkbox) => { checkbox.checked = false; });
   });
   document.querySelector("#bulk-update-dialog")?.addEventListener("close", (event) => {
     if (!pendingEditForm) return;
@@ -291,7 +331,10 @@ document.addEventListener("DOMContentLoaded", () => {
   function addSplitLine(split = {}) {
     const row = document.createElement("div");
     row.className = "split-line";
-    const description = document.createElement("input"); description.className = "split-description"; description.value = split.description || ""; description.placeholder = "Description";
+    const descriptionGroup = document.createElement("label"); descriptionGroup.className = "split-description-field";
+    const descriptionLabel = document.createElement("span"); descriptionLabel.textContent = split.id ? `Custom description · split #${split.id}` : "Custom description";
+    const description = document.createElement("input"); description.className = "split-description"; description.value = split.description || ""; description.placeholder = splitTransaction ? `Suggested: ${splitTransaction.description}` : "Custom description";
+    descriptionGroup.append(descriptionLabel, description);
     const amount = document.createElement("input"); amount.className = "split-amount"; amount.value = split.amount || ""; amount.inputMode = "decimal"; amount.placeholder = "Signed amount";
     const categoryGroup = document.createElement("div"); categoryGroup.className = "split-categories";
     const type = makeSelect("split-type category-type", "Type", Object.keys(categories), split.transaction_type);
@@ -305,7 +348,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const expense = makeSelect("split-expense", "Link expense…", expenses, split.reimbursement_for_id || "");
     options.append(recurringLabel, interval, reimbursementLabel, expense);
     const remove = document.createElement("button"); remove.type = "button"; remove.className = "icon-button danger"; remove.textContent = "Remove"; remove.addEventListener("click", () => row.remove());
-    row.append(description, amount, categoryGroup, options, remove);
+    row.append(descriptionGroup, amount, categoryGroup, options, remove);
     splitLines.append(row);
     initializeCategoryGroup(type);
   }

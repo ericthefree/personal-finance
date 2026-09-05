@@ -1,3 +1,4 @@
+import csv
 import io
 import re
 import sqlite3
@@ -21,6 +22,11 @@ def test_main_pages_render(client):
     for path in ["/", "/cash-flow", "/transactions", "/budget", "/admin"]:
         response = client.get(path)
         assert response.status_code == 200
+
+    transactions_page = client.get("/transactions").data
+    assert b'id="match-amount-range"' in transactions_page
+    assert b'id="select-all-matches"' in transactions_page
+    assert b'id="deselect-all-matches"' in transactions_page
 
 
 def test_cash_flow_splits_budget_periods_and_uses_assigned_month(app, client):
@@ -101,13 +107,18 @@ def test_cash_flow_splits_budget_periods_and_uses_assigned_month(app, client):
     assert "Available after budget" in page
     assert "Period 1" in page and "Days 1–14" in page
     assert "Period 2" in page and "Days 15–month end" in page
+    assert page.count('<details class="period-items" open>') == 2
     assert "First-period income" in page and "$500.00" in page
     assert "First-period bill" in page and "$100.00" in page
     assert "Second-period income" in page and "$400.00" in page
     assert "Second-period bill" in page and "$75.00" in page
+    period_tables = re.findall(r'<table class="data-table period-table">(.*?)</table>', page, re.S)
+    assert len(period_tables) == 2
+    assert all("Actual date" not in table for table in period_tables)
     assert "Assigned early salary" in page
     assert previous_month.replace(day=28).strftime("%m-%d-%Y") in page
     assert "Assigned utility" in page
+    assert page.index("Assigned early salary") < page.index("Assigned utility")
     assert "Different month transaction" not in page
     assert f'<option value="{next_month:%Y-%m}"' in page
 
@@ -138,6 +149,184 @@ def test_cash_flow_generates_recurring_items_for_next_month(app, client):
     with app.app_context():
         item = BudgetItem.query.filter_by(month=next_month, description="Future rent").one()
         assert item.due_date == next_month.replace(day=3)
+
+
+def test_cash_flow_period_balances_use_actual_activity_and_independent_chains(app, client):
+    month = date(2026, 9, 1)
+    with app.app_context():
+        db.session.add(BalanceCheckpoint(balance=1000, transaction_cutoff_id=0))
+        db.session.add(MonthRecord(month=date(2026, 8, 1), closed=True, ending_balance=9999))
+        income = BudgetItem(
+            month=month,
+            due_date=date(2026, 9, 1),
+            description="Paid income",
+            amount=500,
+            paid=True,
+        )
+        first_expense = BudgetItem(
+            month=month,
+            due_date=date(2026, 9, 10),
+            description="First expense",
+            amount=-100,
+            paid=True,
+        )
+        first_unpaid_expense = BudgetItem(
+            month=month,
+            due_date=date(2026, 9, 11),
+            description="First unpaid expense",
+            amount=-60,
+        )
+        first_unpaid_income = BudgetItem(
+            month=month,
+            due_date=date(2026, 9, 12),
+            description="First unpaid income",
+            amount=200,
+        )
+        unpaid_income = BudgetItem(
+            month=month,
+            due_date=date(2026, 9, 15),
+            description="Unpaid income",
+            amount=400,
+        )
+        second_expense = BudgetItem(
+            month=month,
+            due_date=date(2026, 9, 20),
+            description="Second expense",
+            amount=-75,
+        )
+        income_transaction = Transaction(
+            bank_date=date(2026, 9, 1),
+            budget_month=month,
+            amount=450,
+            bank_description="Paid income",
+        )
+        expense_transaction = Transaction(
+            bank_date=date(2026, 9, 10),
+            budget_month=month,
+            amount=-90,
+            bank_description="First expense",
+        )
+        non_budget_transaction = Transaction(
+            bank_date=date(2026, 9, 12),
+            budget_month=month,
+            amount=-25,
+            bank_description="Unbudgeted purchase",
+        )
+        db.session.add_all(
+            [
+                income,
+                first_expense,
+                first_unpaid_expense,
+                first_unpaid_income,
+                unpaid_income,
+                second_expense,
+                income_transaction,
+                expense_transaction,
+                non_budget_transaction,
+            ]
+        )
+        db.session.flush()
+        income.transaction_id = income_transaction.id
+        income.actual_amount = income_transaction.amount
+        first_expense.transaction_id = expense_transaction.id
+        first_expense.actual_amount = expense_transaction.amount
+        db.session.commit()
+
+    response = client.get("/cash-flow?month=2026-09")
+    page = response.data.decode()
+
+    assert response.status_code == 200
+    assert 'data-balance="budget" data-value="540.00"' in page
+    assert 'data-balance="all-activity" data-value="1475.00"' in page
+    assert 'data-balance="conservative" data-value="1275.00"' in page
+    assert 'data-balance="budget" data-value="325.00"' in page
+    assert 'data-balance="all-activity" data-value="1800.00"' in page
+    assert 'data-balance="conservative" data-value="1200.00"' in page
+    assert "Available after budget</span><strong>$1,800.00" in page
+    assert "Incoming paid</span><strong class=\"positive-text\">$450.00" in page
+    assert "Outgoing paid</span><strong class=\"negative-text\">$90.00" in page
+    assert "the current remaining balance" in page
+    assert "All activity starts with Period 1's" in page
+
+
+def test_budget_matches_include_transactions_from_previous_calendar_month(app, client):
+    with app.app_context():
+        template = RecurringTemplate(
+            description="Checking Transfer",
+            amount=-500,
+            day_of_month=1,
+            anchor_month=date(2026, 9, 1),
+        )
+        db.session.add(template)
+        db.session.flush()
+        db.session.add_all(
+            [
+                BudgetItem(
+                    month=date(2026, 9, 1),
+                    due_date=date(2026, 9, 1),
+                    description="Checking Transfer",
+                    amount=-500,
+                    recurring_template_id=template.id,
+                ),
+                Transaction(
+                    bank_date=date(2026, 8, 26),
+                    budget_month=date(2026, 8, 1),
+                    amount=-500,
+                    bank_description="Checking Transfer 08-26",
+                ),
+                Transaction(
+                    bank_date=date(2026, 7, 31),
+                    budget_month=date(2026, 7, 1),
+                    amount=-500,
+                    bank_description="Too old transfer",
+                ),
+            ]
+        )
+        db.session.commit()
+
+    response = client.get("/budget?month=2026-09")
+
+    assert response.status_code == 200
+    assert b"08-26 \xc2\xb7 Checking Transfer 08-26" in response.data
+    assert b"Too old transfer" not in response.data
+    assert b">Recurring</span>" not in response.data
+    assert b"sessionStorage.setItem('budget-scroll-position'" in response.data
+
+
+def test_budget_transaction_association_saves_without_marking_paid(app, client):
+    month = date.today().replace(day=1)
+    with app.app_context():
+        item = BudgetItem(
+            month=month,
+            due_date=date.today(),
+            description="Checking Transfer",
+            amount=-500,
+        )
+        transaction = Transaction(
+            bank_date=date.today(),
+            budget_month=month,
+            amount=-500,
+            bank_description="Checking Transfer",
+        )
+        db.session.add_all([item, transaction])
+        db.session.commit()
+        item_id = item.id
+        transaction_id = transaction.id
+
+    response = client.post(
+        f"/budget/{item_id}/paid",
+        data={"paid": "false", "transaction_match": f"transaction:{transaction_id}"},
+    )
+
+    assert response.status_code == 200
+    with app.app_context():
+        item = db.session.get(BudgetItem, item_id)
+        assert not item.paid
+        assert item.transaction_id == transaction_id
+        assert item.actual_amount == Decimal("-500.00")
+
+    page = client.get(f"/budget?month={month:%Y-%m}")
+    assert f'<option value="transaction:{transaction_id}" selected>'.encode() in page.data
 
 
 def test_transactions_show_fifty_rows_and_pagination_at_both_ends(app, client):
@@ -511,6 +700,13 @@ def test_transaction_matches_include_same_bank_description_with_different_amount
 
     assert response.status_code == 200
     assert [match["amount"] for match in response.json["matches"]] == ["$1,900.00", "$2,050.00"]
+    assert [match["amount_difference"] for match in response.json["matches"]] == [100.0, 50.0]
+    assert response.json["target_amount"] == 2000.0
+
+    edited_amount_response = client.get(
+        f"/transactions/{transaction_id}/matches", query_string={"amount": "2050"}
+    )
+    assert [match["amount_difference"] for match in edited_amount_response.json["matches"]] == [150.0, 0.0]
 
 
 def test_recurring_transaction_edits_update_open_budget_item(app, client):
@@ -690,6 +886,40 @@ def test_recurring_transaction_can_associate_existing_budget_item_without_duplic
         assert RecurringTemplate.query.count() == 1
 
 
+def test_recurring_matches_include_same_amount_with_different_description(app, client):
+    month = date.today().replace(day=1)
+    with app.app_context():
+        transaction = Transaction(
+            bank_date=date.today(),
+            budget_month=month,
+            amount=-89.56,
+            bank_description="VERIZON WIRELESS",
+            custom_description="Verizon Wireless Samuel reimbursement",
+        )
+        budget_item = BudgetItem(
+            month=month,
+            due_date=date.today(),
+            description="Samuel phone reimbursement",
+            amount=-89.56,
+        )
+        db.session.add_all([transaction, budget_item])
+        db.session.commit()
+        transaction_id = transaction.id
+        budget_item_id = budget_item.id
+
+    response = client.get(f"/transactions/{transaction_id}/recurring-matches")
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json["matches"]] == [budget_item_id]
+    assert response.json["matches"][0]["suggested"]
+
+    changed_amount_response = client.get(
+        f"/transactions/{transaction_id}/recurring-matches",
+        query_string={"amount": "-80.00"},
+    )
+    assert changed_amount_response.json["matches"] == []
+
+
 def test_recurring_create_reuses_its_existing_budget_item(app, client):
     with app.app_context():
         transaction = Transaction(
@@ -752,3 +982,90 @@ def test_database_backup_is_valid_sqlite(client):
         for row in connection.execute("select name from sqlite_master where type = 'table'")
     }
     assert {"transaction", "budget_item", "balance_checkpoint"}.issubset(tables)
+
+
+def test_transaction_export_includes_recurring_and_budget_status(app, client):
+    with app.app_context():
+        budgeted = Transaction(
+            bank_date=date(2026, 9, 5),
+            budget_month=date(2026, 9, 1),
+            amount=-25,
+            bank_description="Budgeted subscription",
+            is_recurring=True,
+        )
+        unbudgeted = Transaction(
+            bank_date=date(2026, 9, 6),
+            budget_month=date(2026, 9, 1),
+            amount=-10,
+            bank_description="One-time purchase",
+        )
+        db.session.add_all([budgeted, unbudgeted])
+        db.session.flush()
+        template = RecurringTemplate(
+            description="Budgeted subscription",
+            amount=-25,
+            day_of_month=5,
+            anchor_month=date(2026, 9, 1),
+            created_from_transaction_id=budgeted.id,
+        )
+        db.session.add(template)
+        db.session.flush()
+        db.session.add(
+            BudgetItem(
+                month=date(2026, 9, 1),
+                due_date=date(2026, 9, 5),
+                description="Budgeted subscription",
+                amount=-25,
+                recurring_template_id=template.id,
+            )
+        )
+        db.session.commit()
+
+    response = client.get("/admin/export/transactions")
+    rows = list(csv.DictReader(io.StringIO(response.data.decode())))
+
+    assert response.status_code == 200
+    assert rows[0]["Budget Month"] == "2026-09"
+    assert rows[0]["Recurring"] == "Yes"
+    assert rows[0]["In Budget"] == "Yes"
+    assert rows[1]["Recurring"] == "No"
+    assert rows[1]["In Budget"] == "No"
+
+
+def test_budget_export_supports_single_month_and_range(app, client):
+    with app.app_context():
+        db.session.add_all(
+            [
+                BudgetItem(
+                    month=date(2026, 8, 1),
+                    due_date=date(2026, 8, 5),
+                    description="August",
+                    amount=-1,
+                ),
+                BudgetItem(
+                    month=date(2026, 9, 1),
+                    due_date=date(2026, 9, 5),
+                    description="September",
+                    amount=-2,
+                ),
+                BudgetItem(
+                    month=date(2026, 10, 1),
+                    due_date=date(2026, 10, 5),
+                    description="October",
+                    amount=-3,
+                ),
+            ]
+        )
+        db.session.commit()
+
+    single = client.get("/admin/export/budget?start_month=2026-09")
+    ranged = client.get("/admin/export/budget?start_month=2026-08&end_month=2026-09")
+    invalid = client.get("/admin/export/budget?start_month=2026-10&end_month=2026-09")
+
+    assert "September" in single.data.decode()
+    assert "August" not in single.data.decode() and "October" not in single.data.decode()
+    assert "budgets-2026-09.csv" in single.headers["Content-Disposition"]
+    assert "August" in ranged.data.decode() and "September" in ranged.data.decode()
+    assert "October" not in ranged.data.decode()
+    assert "budgets-2026-08-to-2026-09.csv" in ranged.headers["Content-Disposition"]
+    assert invalid.status_code == 400

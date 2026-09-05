@@ -65,6 +65,10 @@ def parse_month(value):
         return month_start()
 
 
+def parse_export_month(value):
+    return datetime.strptime(value, "%Y-%m").date().replace(day=1)
+
+
 def form_decimal(name, *, signed=True):
     try:
         value = Decimal(request.form[name].replace("$", "").replace(",", "")).quantize(
@@ -284,17 +288,50 @@ def cash_flow():
         BudgetItem.deleted_at.is_(None)
     ).order_by(BudgetItem.due_date, BudgetItem.id).all()
 
-    def period(label, date_range, period_items):
+    transactions = Transaction.query.filter_by(budget_month=selected_month).filter(
+        Transaction.deleted_at.is_(None)
+    ).order_by(
+        (Transaction.amount > 0).desc(),
+        Transaction.bank_date.desc(),
+        Transaction.id.desc(),
+    ).all()
+
+    def period(
+        label,
+        date_range,
+        period_items,
+        all_activity_opening,
+        conservative_opening,
+    ):
         def total(paid, incoming):
             return sum(
                 (
-                    abs(Decimal(item.amount))
+                    abs(
+                        Decimal(item.actual_amount)
+                        if paid and item.actual_amount is not None
+                        else Decimal(item.amount)
+                    )
                     for item in period_items
                     if item.paid == paid and (item.amount > 0) == incoming
                 ),
                 Decimal("0"),
             )
 
+        all_budget_items = sum(
+            (Decimal(item.amount) for item in period_items), Decimal("0")
+        )
+        remaining_budget_items = sum(
+            (Decimal(item.amount) for item in period_items if not item.paid),
+            Decimal("0"),
+        )
+        remaining_outgoing_items = sum(
+            (
+                Decimal(item.amount)
+                for item in period_items
+                if item.amount < 0 and not item.paid
+            ),
+            Decimal("0"),
+        )
         return {
             "label": label,
             "date_range": date_range,
@@ -303,16 +340,37 @@ def cash_flow():
             "incoming_remaining": total(False, True),
             "outgoing_paid": total(True, False),
             "outgoing_remaining": total(False, False),
+            "all_activity_opening": all_activity_opening,
+            "conservative_opening": conservative_opening,
+            "budget_balance": all_budget_items,
+            "all_activity_balance": (
+                all_activity_opening + remaining_budget_items
+                if all_activity_opening is not None
+                else None
+            ),
+            "conservative_balance": (
+                conservative_opening + remaining_outgoing_items
+                if conservative_opening is not None
+                else None
+            ),
         }
 
-    periods = [
-        period("Period 1", "Days 1–14", [item for item in items if item.due_date.day < 15]),
-        period("Period 2", "Days 15–month end", [item for item in items if item.due_date.day >= 15]),
-    ]
-    transactions = Transaction.query.filter_by(budget_month=selected_month).filter(
-        Transaction.deleted_at.is_(None)
-    ).order_by(Transaction.bank_date.desc(), Transaction.id.desc()).all()
     balance = current_balance()
+    first_period = period(
+        "Period 1",
+        "Days 1–14",
+        [item for item in items if item.due_date.day < 15],
+        balance,
+        balance,
+    )
+    second_period = period(
+        "Period 2",
+        "Days 15–month end",
+        [item for item in items if item.due_date.day >= 15],
+        first_period["all_activity_balance"],
+        first_period["conservative_balance"],
+    )
+    periods = [first_period, second_period]
     known_months = {
         month
         for (month,) in db.session.query(MonthRecord.month).all()
@@ -438,6 +496,12 @@ def add_transaction():
 @bp.get("/transactions/<int:transaction_id>/matches")
 def transaction_matches(transaction_id):
     transaction = db.get_or_404(Transaction, transaction_id)
+    try:
+        target_amount = Decimal(request.args.get("amount", str(transaction.amount)))
+        if not target_amount.is_finite():
+            raise InvalidOperation
+    except InvalidOperation:
+        target_amount = Decimal(transaction.amount)
     matches = Transaction.query.filter(
         Transaction.id != transaction.id,
         Transaction.deleted_at.is_(None),
@@ -450,9 +514,12 @@ def transaction_matches(transaction_id):
                 "date": match.bank_date.strftime("%m-%d-%Y"),
                 "description": match.display_description,
                 "amount": currency(match.amount),
+                "raw_amount": float(match.amount),
+                "amount_difference": float(abs(match.amount - target_amount)),
             }
             for match in matches
-        ]
+        ],
+        "target_amount": float(target_amount),
     }
 
 
@@ -610,6 +677,12 @@ def toggle_recurring(transaction_id):
 def recurring_budget_matches(transaction_id):
     transaction = db.get_or_404(Transaction, transaction_id)
     description = match_text(request.args.get("description") or transaction.display_description)
+    try:
+        transaction_amount = Decimal(request.args.get("amount", str(transaction.amount)))
+        if not transaction_amount.is_finite():
+            raise InvalidOperation
+    except InvalidOperation:
+        transaction_amount = Decimal(transaction.amount)
     transaction_type = request.args.get("transaction_type") or transaction.transaction_type
     parent = request.args.get("parent_category") or transaction.parent_category
     subcategory = request.args.get("subcategory") or transaction.subcategory
@@ -635,16 +708,28 @@ def recurring_budget_matches(transaction_id):
     )
     matches = []
     for item in BudgetItem.query.filter_by(month=budget_month).filter(
-        BudgetItem.deleted_at.is_(None)
+        BudgetItem.deleted_at.is_(None),
+        or_(BudgetItem.transaction_id.is_(None), BudgetItem.transaction_id == transaction.id),
     ):
-        description_matches = description and match_text(item.description) == description
+        item_description = match_text(item.description)
+        description_matches = bool(
+            description
+            and item_description
+            and (
+                item_description == description
+                or item_description in description
+                or description in item_description
+            )
+        )
         category_matches = bool(
             parent
             and item.transaction_type == transaction_type
             and item.parent_category == parent
             and (not subcategory or item.subcategory == subcategory)
         )
-        if not description_matches and not category_matches:
+        amount_difference = abs(Decimal(item.amount) - transaction_amount)
+        amount_matches = amount_difference == 0
+        if not description_matches and not category_matches and not amount_matches:
             continue
         matches.append(
             {
@@ -652,10 +737,18 @@ def recurring_budget_matches(transaction_id):
                 "date": item.due_date.strftime("%m-%d-%Y"),
                 "description": item.description,
                 "amount": currency(item.amount),
+                "amount_difference": float(amount_difference),
                 "recurring": bool(item.recurring_template_id),
+                "suggested": description_matches or amount_matches,
             }
         )
-    matches.sort(key=lambda item: item["date"])
+    matches.sort(
+        key=lambda item: (
+            not item["suggested"],
+            item["amount_difference"],
+            item["date"],
+        )
+    )
     return {"matches": matches, "configured": configured}
 
 
@@ -743,6 +836,7 @@ def get_splits(transaction_id):
     return {
         "splits": [
             {
+                "id": split.id,
                 "description": split.description,
                 "amount": str(split.amount),
                 "transaction_type": split.transaction_type or "",
@@ -781,8 +875,15 @@ def budget():
     ]
     recent = all_history[:3]
     older = all_history[3:]
-    available_transactions = Transaction.query.filter_by(budget_month=month).filter(
-        Transaction.deleted_at.is_(None)
+    available_transactions = Transaction.query.filter(
+        Transaction.deleted_at.is_(None),
+        or_(
+            Transaction.budget_month == month,
+            (
+                (Transaction.bank_date >= add_months(month, -1))
+                & (Transaction.bank_date < add_months(month, 1))
+            ),
+        ),
     ).order_by(Transaction.bank_date.desc()).all()
     available_matches = []
     for transaction in available_transactions:
@@ -929,7 +1030,7 @@ def mark_budget_paid(item_id):
         abort(409, "Closed months are read-only.")
     item.paid = request.form.get("paid") == "true"
     match_value = request.form.get("transaction_match", "")
-    if item.paid and match_value:
+    if match_value:
         try:
             match_type, raw_match_id = match_value.split(":", 1)
             match_id = int(raw_match_id)
@@ -947,9 +1048,9 @@ def mark_budget_paid(item_id):
             item.transaction_id = transaction.id
             item.transaction_split_id = None
             item.actual_amount = transaction.amount
-        if item.recurring_template:
+        if item.paid and item.recurring_template:
             item.recurring_template.amount = item.actual_amount
-    elif not item.paid:
+    else:
         item.transaction_id = None
         item.transaction_split_id = None
         item.actual_amount = None
@@ -1292,17 +1393,49 @@ def backup_database():
 def export_transactions():
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Date", "Amount", "Custom Description", "Bank Description", "Type", "Parent", "Subcategory"])
+    writer.writerow(
+        [
+            "Date",
+            "Budget Month",
+            "Amount",
+            "Custom Description",
+            "Bank Description",
+            "Type",
+            "Parent",
+            "Subcategory",
+            "Recurring",
+            "In Budget",
+        ]
+    )
+    split_transactions = dict(db.session.query(TransactionSplit.id, TransactionSplit.transaction_id))
+    template_transactions = {}
+    for template in RecurringTemplate.query.all():
+        template_transactions[template.id] = (
+            template.created_from_transaction_id
+            or split_transactions.get(template.created_from_split_id)
+        )
+    budget_transaction_ids = set()
+    for item in BudgetItem.query.filter(BudgetItem.deleted_at.is_(None)):
+        transaction_id = (
+            item.transaction_id
+            or split_transactions.get(item.transaction_split_id)
+            or template_transactions.get(item.recurring_template_id)
+        )
+        if transaction_id:
+            budget_transaction_ids.add(transaction_id)
     for transaction in Transaction.query.filter(Transaction.deleted_at.is_(None)).order_by(Transaction.bank_date):
         writer.writerow(
             [
                 transaction.bank_date.strftime("%m-%d-%Y"),
+                transaction.budget_month.strftime("%Y-%m"),
                 transaction.amount,
                 transaction.display_description,
                 transaction.bank_description,
                 transaction.transaction_type or "",
                 transaction.parent_category or "",
                 transaction.subcategory or "",
+                "Yes" if transaction.is_recurring else "No",
+                "Yes" if transaction.id in budget_transaction_ids else "No",
             ]
         )
     return Response(
@@ -1314,13 +1447,33 @@ def export_transactions():
 
 @bp.get("/admin/export/budget")
 def export_budget():
+    start_value = request.args.get("start_month", "").strip()
+    end_value = request.args.get("end_month", "").strip()
+    try:
+        start_month = parse_export_month(start_value or end_value) if (start_value or end_value) else None
+        end_month = parse_export_month(end_value or start_value) if (start_value or end_value) else None
+    except ValueError:
+        abort(400, "Budget export months must use YYYY-MM format.")
+    if start_month and end_month and start_month > end_month:
+        abort(400, "Budget export start month must not be after the end month.")
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["Month", "Due Date", "Description", "Amount", "Paid", "Actual"])
-    for item in BudgetItem.query.filter(BudgetItem.deleted_at.is_(None)).order_by(BudgetItem.month, BudgetItem.due_date):
+    query = BudgetItem.query.filter(BudgetItem.deleted_at.is_(None))
+    if start_month:
+        query = query.filter(BudgetItem.month >= start_month)
+    if end_month:
+        query = query.filter(BudgetItem.month <= end_month)
+    for item in query.order_by(BudgetItem.month, BudgetItem.due_date):
         writer.writerow([item.month.strftime("%Y-%m"), item.due_date, item.description, item.amount, item.paid, item.actual_amount or ""])
+    if not start_month:
+        filename = "budgets.csv"
+    elif start_month == end_month:
+        filename = f"budgets-{start_month:%Y-%m}.csv"
+    else:
+        filename = f"budgets-{start_month:%Y-%m}-to-{end_month:%Y-%m}.csv"
     return Response(
         output.getvalue(),
         mimetype="text/csv",
-        headers={"Content-Disposition": "attachment; filename=budgets.csv"},
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
     )

@@ -22,22 +22,31 @@
   {% for period in periods %}
   <article class="panel cash-flow-period">
     <div class="panel-heading"><div><p class="eyebrow">{{ period.date_range }}</p><h2>{{ period.label }}</h2></div><span>{{ period.budget_items|length }} item{{ '' if period.budget_items|length == 1 else 's' }}</span></div>
+    <div class="period-balances">
+      <div data-balance="budget" data-value="{{ period.budget_balance }}"><span>Budget-only balance</span><strong>{{ period.budget_balance|currency }}</strong><small>All incoming minus all outgoing budget items</small></div>
+      <div data-balance="all-activity" data-value="{{ period.all_activity_balance }}"><span>All-activity balance</span><strong>{{ period.all_activity_balance|currency }}</strong><small>Actual activity plus all unpaid budget items</small></div>
+      <div class="conservative" data-balance="conservative" data-value="{{ period.conservative_balance }}"><span>Conservative balance</span><strong>{{ period.conservative_balance|currency }}</strong><small>Actual activity plus unpaid outgoing items only</small></div>
+    </div>
+    {% if loop.first %}<p class="period-opening muted">Activity balances start with {{ period.all_activity_opening|currency }}, the current remaining balance. Paid items use their actual transaction amounts.</p>{% else %}<p class="period-opening muted">All activity starts with Period 1's {{ period.all_activity_opening|currency }} all-activity balance; conservative starts with its {{ period.conservative_opening|currency }} conservative balance.</p>{% endif %}
     <div class="period-totals">
       <div><span>Incoming paid</span><strong class="positive-text">{{ period.incoming_paid|currency }}</strong></div>
       <div><span>Incoming remaining</span><strong class="positive-text">{{ period.incoming_remaining|currency }}</strong></div>
       <div><span>Outgoing paid</span><strong class="negative-text">{{ period.outgoing_paid|currency }}</strong></div>
       <div><span>Outgoing remaining</span><strong class="negative-text">{{ period.outgoing_remaining|currency }}</strong></div>
     </div>
-    <div class="table-panel period-table-wrap">
-      <table class="data-table period-table">
-        <thead><tr><th>Budget date</th><th>Actual date</th><th>Item</th><th class="amount-cell">Amount</th><th>Status</th></tr></thead>
+    <details class="period-items" open>
+      <summary><span class="period-items-title">Budget items</span><span>{{ period.budget_items|length }} item{{ '' if period.budget_items|length == 1 else 's' }}</span></summary>
+      <div class="table-panel period-table-wrap">
+        <table class="data-table period-table">
+        <thead><tr><th class="period-budget-date">Budget date</th><th>Item</th><th class="amount-cell">Amount</th><th>Status</th></tr></thead>
         <tbody>
           {% for item in period.budget_items %}
-          <tr class="{{ 'paid-row' if item.paid }}"><td>{{ item.due_date|date_us }}</td><td>{% if item.transaction %}{{ item.transaction.bank_date|date_us }}{% elif item.transaction_split %}{{ item.transaction_split.transaction.bank_date|date_us }}{% else %}—{% endif %}</td><td>{{ item.description }}</td><td class="amount-cell {{ 'positive-text' if item.amount > 0 else 'negative-text' }}">{{ item.amount|currency }}</td><td><span class="status {{ 'complete' if item.paid }}">{{ 'Paid' if item.paid else 'Remaining' }}</span></td></tr>
-          {% else %}<tr><td colspan="5" class="empty-state">No budget items in this period.</td></tr>{% endfor %}
+          <tr class="{{ 'paid-row' if item.paid }}"><td class="period-budget-date">{{ item.due_date|date_us }}</td><td>{{ item.description }}</td><td class="amount-cell {{ 'positive-text' if item.amount > 0 else 'negative-text' }}">{{ item.amount|currency }}</td><td><span class="status {{ 'complete' if item.paid }}">{{ 'Paid' if item.paid else 'Remaining' }}</span></td></tr>
+          {% else %}<tr><td colspan="4" class="empty-state">No budget items in this period.</td></tr>{% endfor %}
         </tbody>
-      </table>
-    </div>
+        </table>
+      </div>
+    </details>
   </article>
   {% endfor %}
 </section>
