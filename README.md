@@ -23,6 +23,32 @@ your trusted home network, run the production server:
 Then open `http://<local-machine-ip>:5000` from the other device. The application has no
 authentication and should not be exposed directly to the public internet.
 
+## Install as a macOS application
+
+On the Mac that will store the finance data, run:
+
+```bash
+./scripts/macos/install.sh
+```
+
+The installer creates **Personal Finance.app** in the current user's `Applications` folder and a
+macOS `launchd` service. The service starts automatically when that user logs in, keeps running
+while the screen is locked, and restarts if it exits unexpectedly. After restarting the Mac, it
+will be available again as soon as the user logs in. Opening the application starts the service if
+necessary and opens `http://127.0.0.1:5000` in the default browser.
+
+The application remains tied to this project folder because the database is stored here. If this
+folder is moved, rerun the installer from its new location. Logs are written to
+`~/Library/Logs/Personal Finance/`.
+
+To stop automatic startup and remove the application launcher:
+
+```bash
+./scripts/macos/uninstall.sh
+```
+
+Uninstalling preserves the database and project files.
+
 ## First import
 
 Open **Admin**, choose the bank CSV, review the preview, and enter the current bank balance when
