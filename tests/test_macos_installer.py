@@ -28,3 +28,10 @@ def test_installer_copies_complete_launcher_bundle_resources():
     assert 'cp "$app_icon_source" "$app_path/Contents/Resources/PersonalFinance.icns"' in installer
     assert "printf 'APPL????' > \"$app_path/Contents/PkgInfo\"" in installer
     assert 'cat > "$app_path/Contents/MacOS/Personal Finance"' in installer
+
+
+def test_installed_service_listens_on_the_trusted_local_network():
+    installer = (MACOS_SCRIPTS / "install.sh").read_text(encoding="utf-8")
+
+    assert '"--listen=0.0.0.0:5000"' in installer
+    assert "http://$local_hostname.local:5000" in installer

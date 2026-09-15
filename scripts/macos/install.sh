@@ -45,7 +45,7 @@ configuration = {
     "Label": "com.personal-finance.web",
     "ProgramArguments": [
         os.path.join(os.environ["REPO_ROOT"], ".venv/bin/waitress-serve"),
-        "--listen=127.0.0.1:5000",
+        "--listen=0.0.0.0:5000",
         "run:app",
     ],
     "WorkingDirectory": os.environ["REPO_ROOT"],
@@ -94,6 +94,10 @@ for attempt in {1..30}; do
     if curl --silent --fail --max-time 1 http://127.0.0.1:5000/ >/dev/null; then
         printf '\n%s\n' "Personal Finance is installed and running."
         printf '%s\n' "Open it from $app_path or visit http://127.0.0.1:5000."
+        local_hostname="$(scutil --get LocalHostName 2>/dev/null || hostname -s)"
+        if [[ -n "$local_hostname" ]]; then
+            printf '%s\n' "On your trusted Wi-Fi, open http://$local_hostname.local:5000 from your phone."
+        fi
         open "$app_path"
         exit 0
     fi

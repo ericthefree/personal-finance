@@ -38,6 +38,13 @@ will be available again as soon as the user logs in. Opening the application sta
 necessary and opens `http://127.0.0.1:5000` in the default browser. Rerunning the installer replaces
 the launcher bundle so its metadata and application icon stay current without changing the database.
 
+The installed service also accepts connections from devices on the same trusted local network. The
+installer prints the phone-friendly URL, normally `http://<mac-name>.local:5000`. On iPhone, open
+that URL in Safari and choose **Share → Add to Home Screen**. On Android, open it in Chrome and
+choose **Add to Home screen**. The Mac must be awake and connected, and macOS may ask permission for
+incoming network connections. The app has no authentication; do not port-forward it or otherwise
+expose it directly to the internet.
+
 The application remains tied to this project folder because the database is stored here. If this
 folder is moved, rerun the installer from its new location. Logs are written to
 `~/Library/Logs/Personal Finance/`.
