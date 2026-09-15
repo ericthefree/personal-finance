@@ -1,3 +1,10 @@
+<!--
+File: README.md
+Summary: Describes Personal Finance setup, operation, platform applications, and data workflows.
+Modified by: Eric Freeman
+Last modified: 2026-09-15
+-->
+
 # Personal Finance
 
 A local, single-user web application for importing checking-account transactions, tracking a
@@ -71,6 +78,23 @@ To stop automatic startup and remove the application launcher:
 ```
 
 Uninstalling preserves the database and project files.
+
+## Install the iPhone application
+
+The native SwiftUI companion application is in `ios/PersonalFinance.xcodeproj`. It opens Personal
+Finance inside the application over Tailscale, remembers the private server URL, and provides native
+settings and connection-retry controls. Changes to the web application appear immediately without
+reinstalling the iPhone application.
+
+See [`ios/README.md`](ios/README.md) for Tailscale prerequisites and step-by-step Xcode signing,
+installation, and seven-day free-profile renewal instructions.
+
+## Documentation
+
+- [`CHANGELOG.md`](CHANGELOG.md) records user-visible and operational changes.
+- [`AGENTS.md`](AGENTS.md) defines the file-header, function-comment, README, and changelog standards
+  for future work.
+- Platform-specific setup details live beside their implementation, such as [`ios/README.md`](ios/README.md).
 
 ## First import
 

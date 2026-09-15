@@ -1,4 +1,12 @@
+"""
+File: test_macos_installer.py
+Summary: Verifies macOS launcher metadata, resources, service networking, and conflict handling.
+Modified by: Eric Freeman
+Last modified: 2026-09-15
+"""
+
 import plistlib
+import struct
 from pathlib import Path
 
 
@@ -7,6 +15,7 @@ MACOS_SCRIPTS = ROOT / "scripts" / "macos"
 
 
 def test_launcher_metadata_references_packaged_icon_and_working_executable():
+    """Verify launcher identity, compatibility metadata, executable, and packaged ICNS resource."""
     with (MACOS_SCRIPTS / "app-info.plist").open("rb") as plist_file:
         metadata = plistlib.load(plist_file)
 
@@ -16,12 +25,18 @@ def test_launcher_metadata_references_packaged_icon_and_working_executable():
     assert metadata["CFBundleIdentifier"] == "com.personal-finance.launcher"
     assert metadata["LSMinimumSystemVersion"] == "11.0"
     assert metadata["CFBundleSupportedPlatforms"] == ["MacOSX"]
+    assert metadata["CFBundleShortVersionString"] == "1.1"
+    assert metadata["CFBundleVersion"] == "2"
 
     icon = MACOS_SCRIPTS / "resources" / metadata["CFBundleIconFile"]
-    assert icon.read_bytes().startswith(b"icns")
+    icon_data = icon.read_bytes()
+    assert icon_data.startswith(b"icns")
+    assert struct.unpack(">I", icon_data[4:8])[0] == len(icon_data)
+    assert b"ic10" in icon_data
 
 
 def test_installer_copies_complete_launcher_bundle_resources():
+    """Verify the installer copies every file required by the macOS application bundle."""
     installer = (MACOS_SCRIPTS / "install.sh").read_text(encoding="utf-8")
 
     assert 'cp "$app_plist_source" "$app_path/Contents/Info.plist"' in installer
@@ -31,6 +46,7 @@ def test_installer_copies_complete_launcher_bundle_resources():
 
 
 def test_installed_service_listens_only_locally_and_on_tailscale():
+    """Verify the installed service excludes LAN interfaces and binds only local and Tailscale IPs."""
     installer = (MACOS_SCRIPTS / "install.sh").read_text(encoding="utf-8")
 
     assert '"--listen=127.0.0.1:5050"' in installer
@@ -40,6 +56,7 @@ def test_installed_service_listens_only_locally_and_on_tailscale():
 
 
 def test_installer_requires_a_connected_tailscale_client():
+    """Verify installation stops with actionable guidance unless Tailscale is available and online."""
     installer = (MACOS_SCRIPTS / "install.sh").read_text(encoding="utf-8")
 
     assert 'command -v tailscale' in installer
@@ -49,6 +66,7 @@ def test_installer_requires_a_connected_tailscale_client():
 
 
 def test_installer_stops_existing_service_and_reports_other_port_owner():
+    """Verify installation stops its service before launch and diagnoses unrelated port listeners."""
     installer = (MACOS_SCRIPTS / "install.sh").read_text(encoding="utf-8")
 
     bootout = 'launchctl bootout "$service_target"'

@@ -1,3 +1,8 @@
+# File: .gitignore
+# Summary: Excludes generated, local, sensitive, and platform-specific files from version control.
+# Modified by: Eric Freeman
+# Last modified: 2026-09-15
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -193,6 +198,10 @@ node_modules/
 package-lock.json
 package.json
 scripts/.DS_Store
+
+# Xcode user state and build output
+**/xcuserdata/
+DerivedData/
 
 # Abstra
 #   Abstra is an AI-powered process automation framework.
