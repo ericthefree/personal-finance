@@ -50,6 +50,7 @@ from .services import (
     month_start,
     monthly_activity,
     parse_csv_upload,
+    reconcile_transactions,
 )
 
 
@@ -93,6 +94,53 @@ def recurrence_interval(value):
 
 def match_text(value):
     return " ".join((value or "").casefold().split())
+
+
+def import_transaction_rows(filename, rows):
+    batch = ImportBatch(filename=filename, imported_count=len(rows))
+    db.session.add(batch)
+    db.session.flush()
+    current = month_start()
+    inherited_settings = {}
+    existing_transactions = Transaction.query.filter(
+        Transaction.deleted_at.is_(None)
+    ).order_by(Transaction.bank_date.desc(), Transaction.id.desc())
+    for existing in existing_transactions:
+        key = match_text(existing.bank_description)
+        has_settings = any(
+            (
+                existing.custom_description,
+                existing.transaction_type,
+                existing.parent_category,
+                existing.subcategory,
+                existing.is_recurring,
+            )
+        )
+        if key and has_settings and key not in inherited_settings:
+            inherited_settings[key] = existing
+    for row in rows:
+        bank_date = date.fromisoformat(row["bank_date"])
+        row_month = month_start(bank_date)
+        month_record = MonthRecord.query.filter_by(month=row_month).first()
+        if not month_record:
+            db.session.add(MonthRecord(month=row_month, closed=row_month < current))
+        inherited = inherited_settings.get(match_text(row["description"]))
+        db.session.add(
+            Transaction(
+                bank_date=bank_date,
+                budget_month=row_month,
+                amount=Decimal(row["amount"]),
+                bank_description=row["description"],
+                custom_description=inherited.custom_description if inherited else None,
+                transaction_type=inherited.transaction_type if inherited else None,
+                parent_category=inherited.parent_category if inherited else None,
+                subcategory=inherited.subcategory if inherited else None,
+                is_recurring=inherited.is_recurring if inherited else False,
+                import_batch_id=batch.id,
+            )
+        )
+    db.session.flush()
+    return batch
 
 
 def recurring_budget_day(transaction):
@@ -1285,57 +1333,14 @@ def import_confirm():
         flash("That import preview expired. Upload the file again.", "error")
         return redirect(url_for("main.admin"))
     payload = json.loads(preview_path.read_text(encoding="utf-8"))
-    batch = ImportBatch(filename=payload["filename"])
-    db.session.add(batch)
-    db.session.flush()
-    imported = 0
     duplicates = 0
-    current = month_start()
-    inherited_settings = {}
-    existing_transactions = Transaction.query.filter(
-        Transaction.deleted_at.is_(None)
-    ).order_by(Transaction.bank_date.desc(), Transaction.id.desc())
-    for existing in existing_transactions:
-        key = match_text(existing.bank_description)
-        has_settings = any(
-            (
-                existing.custom_description,
-                existing.transaction_type,
-                existing.parent_category,
-                existing.subcategory,
-                existing.is_recurring,
-            )
-        )
-        if key and has_settings and key not in inherited_settings:
-            inherited_settings[key] = existing
+    rows_to_import = []
     for row in payload["rows"]:
         if row["duplicate"] or duplicate_exists(row):
             duplicates += 1
             continue
-        bank_date = date.fromisoformat(row["bank_date"])
-        row_month = month_start(bank_date)
-        month_record = MonthRecord.query.filter_by(month=row_month).first()
-        closed = month_record.closed if month_record else row_month < current
-        if not month_record:
-            db.session.add(MonthRecord(month=row_month, closed=closed))
-        inherited = inherited_settings.get(match_text(row["description"]))
-        db.session.add(
-            Transaction(
-                bank_date=bank_date,
-                budget_month=row_month,
-                amount=Decimal(row["amount"]),
-                bank_description=row["description"],
-                custom_description=inherited.custom_description if inherited else None,
-                transaction_type=inherited.transaction_type if inherited else None,
-                parent_category=inherited.parent_category if inherited else None,
-                subcategory=inherited.subcategory if inherited else None,
-                is_recurring=inherited.is_recurring if inherited else False,
-                import_batch_id=batch.id,
-            )
-        )
-        imported += 1
-    db.session.flush()
-    batch.imported_count = imported
+        rows_to_import.append(row)
+    batch = import_transaction_rows(payload["filename"], rows_to_import)
     batch.duplicate_count = duplicates
     if BalanceCheckpoint.query.first() is None:
         try:
@@ -1348,7 +1353,131 @@ def import_confirm():
         db.session.add(BalanceCheckpoint(balance=initial_balance, transaction_cutoff_id=max_id))
     db.session.commit()
     preview_path.unlink(missing_ok=True)
-    flash(f"Imported {imported} transaction(s); discarded {duplicates} duplicate(s).", "success")
+    flash(f"Imported {len(rows_to_import)} transaction(s); discarded {duplicates} duplicate(s).", "success")
+    return redirect(url_for("main.transactions"))
+
+
+def reconciliation_preview(token):
+    if not token.isalnum():
+        abort(400)
+    preview_path = Path(current_app.instance_path, "import_previews", f"{token}.json")
+    if not preview_path.exists():
+        return preview_path, None
+    payload = json.loads(preview_path.read_text(encoding="utf-8"))
+    if payload.get("kind") != "reconciliation":
+        abort(400)
+    return preview_path, payload
+
+
+def reconciliation_result(payload):
+    oldest_date = min(date.fromisoformat(row["bank_date"]) for row in payload["rows"])
+    transactions = Transaction.query.filter(
+        Transaction.bank_date >= oldest_date,
+        Transaction.deleted_at.is_(None),
+    ).all()
+    manual_matches = {
+        int(index): int(transaction_id)
+        for index, transaction_id in payload.get("manual_matches", {}).items()
+    }
+    return reconcile_transactions(
+        payload["rows"],
+        transactions,
+        manual_matches=manual_matches,
+        reviewed=payload.get("reviewed", False),
+    )
+
+
+@bp.post("/admin/reconcile/preview")
+def reconcile_preview():
+    upload = request.files.get("csv_file")
+    if not upload or not upload.filename:
+        flash("Choose a CSV file.", "error")
+        return redirect(url_for("main.admin"))
+    try:
+        rows = parse_csv_upload(upload.read())
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("main.admin"))
+    token = uuid.uuid4().hex
+    payload = {
+        "kind": "reconciliation",
+        "filename": upload.filename,
+        "rows": rows,
+        "manual_matches": {},
+        "reviewed": False,
+    }
+    result = reconciliation_result(payload)
+    if not result["possible_matches"]:
+        payload["reviewed"] = True
+    preview_path = Path(current_app.instance_path, "import_previews", f"{token}.json")
+    preview_path.write_text(json.dumps(payload), encoding="utf-8")
+    return redirect(url_for("main.reconcile_report", token=token))
+
+
+@bp.get("/admin/reconcile/<token>")
+def reconcile_report(token):
+    _, payload = reconciliation_preview(token)
+    if payload is None:
+        flash("That reconciliation report expired. Upload the file again.", "error")
+        return redirect(url_for("main.admin"))
+    return render_template(
+        "reconcile_report.html",
+        token=token,
+        filename=payload["filename"],
+        reviewed=payload.get("reviewed", False),
+        result=reconciliation_result(payload),
+    )
+
+
+@bp.post("/admin/reconcile/<token>/review")
+def reconcile_review(token):
+    preview_path, payload = reconciliation_preview(token)
+    if payload is None:
+        flash("That reconciliation report expired. Upload the file again.", "error")
+        return redirect(url_for("main.admin"))
+    manual_matches = {}
+    for index in range(len(payload["rows"])):
+        transaction_id = request.form.get(f"match_{index}", type=int)
+        if transaction_id:
+            manual_matches[str(index)] = transaction_id
+    payload["manual_matches"] = manual_matches
+    payload["reviewed"] = True
+    preview_path.write_text(json.dumps(payload), encoding="utf-8")
+    return redirect(url_for("main.reconcile_report", token=token))
+
+
+@bp.post("/admin/reconcile/<token>/apply")
+def reconcile_apply(token):
+    preview_path, payload = reconciliation_preview(token)
+    if payload is None:
+        flash("That reconciliation report expired. Upload the file again.", "error")
+        return redirect(url_for("main.admin"))
+    if not payload.get("reviewed"):
+        abort(409, "Review possible matches before applying changes.")
+    result = reconciliation_result(payload)
+    allowed_rows = {row["index"]: row for row in result["csv_only"]}
+    selected_indexes = set(request.form.getlist("import_row", type=int))
+    rows_to_import = [allowed_rows[index] for index in selected_indexes if index in allowed_rows]
+    if rows_to_import:
+        import_transaction_rows(payload["filename"], rows_to_import)
+
+    allowed_transaction_ids = {transaction.id for transaction in result["extra"]}
+    selected_transaction_ids = set(request.form.getlist("remove_transaction", type=int))
+    transactions_to_remove = Transaction.query.filter(
+        Transaction.id.in_(selected_transaction_ids & allowed_transaction_ids),
+        Transaction.deleted_at.is_(None),
+    ).all()
+    for transaction in transactions_to_remove:
+        transaction.deleted_at = datetime.now()
+        db.session.add(
+            AuditRecord(entity_type="transaction", entity_id=transaction.id, action="delete")
+        )
+    db.session.commit()
+    preview_path.unlink(missing_ok=True)
+    flash(
+        f"Reconciliation complete: imported {len(rows_to_import)} and removed {len(transactions_to_remove)} transaction(s).",
+        "success",
+    )
     return redirect(url_for("main.transactions"))
 
 

@@ -282,6 +282,106 @@ def duplicate_exists(row):
     ).first() is not None
 
 
+def reconcile_description(value):
+    return " ".join((value or "").casefold().split())
+
+
+def reconcile_transactions(rows, transactions, manual_matches=None, reviewed=False):
+    manual_matches = manual_matches or {}
+    oldest_date = min(date.fromisoformat(row["bank_date"]) for row in rows)
+    newest_date = max(date.fromisoformat(row["bank_date"]) for row in rows)
+    available = {
+        transaction.id: transaction
+        for transaction in transactions
+        if transaction.deleted_at is None and transaction.bank_date >= oldest_date
+    }
+    unmatched_rows = set(range(len(rows)))
+    matched_count = 0
+
+    for index, row in enumerate(rows):
+        row_key = (
+            date.fromisoformat(row["bank_date"]),
+            Decimal(row["amount"]),
+            reconcile_description(row["description"]),
+        )
+        match_id = next(
+            (
+                transaction_id
+                for transaction_id, transaction in available.items()
+                if (
+                    transaction.bank_date,
+                    Decimal(transaction.amount),
+                    reconcile_description(transaction.bank_description),
+                )
+                == row_key
+            ),
+            None,
+        )
+        if match_id is not None:
+            available.pop(match_id)
+            unmatched_rows.remove(index)
+            matched_count += 1
+
+    for index, transaction_id in manual_matches.items():
+        if index not in unmatched_rows or transaction_id not in available:
+            continue
+        row = rows[index]
+        transaction = available[transaction_id]
+        if (
+            transaction.bank_date == date.fromisoformat(row["bank_date"])
+            and Decimal(transaction.amount) == Decimal(row["amount"])
+        ):
+            available.pop(transaction_id)
+            unmatched_rows.remove(index)
+            matched_count += 1
+
+    possible_matches = []
+    possible_transaction_ids = set()
+    possible_row_indexes = set()
+    if not reviewed:
+        for index in sorted(unmatched_rows):
+            row = rows[index]
+            candidates = [
+                transaction
+                for transaction in available.values()
+                if transaction.bank_date == date.fromisoformat(row["bank_date"])
+                and Decimal(transaction.amount) == Decimal(row["amount"])
+            ]
+            if candidates:
+                possible_matches.append({"row": {**row, "index": index}, "candidates": candidates})
+                possible_row_indexes.add(index)
+                possible_transaction_ids.update(transaction.id for transaction in candidates)
+
+    csv_only = [
+        {**rows[index], "index": index}
+        for index in sorted(unmatched_rows - possible_row_indexes)
+    ]
+    remaining_transactions = [
+        transaction
+        for transaction_id, transaction in available.items()
+        if transaction_id not in possible_transaction_ids
+    ]
+    pending = sorted(
+        (transaction for transaction in remaining_transactions if transaction.bank_date >= newest_date),
+        key=lambda transaction: (transaction.bank_date, transaction.id),
+        reverse=True,
+    )
+    extra = sorted(
+        (transaction for transaction in remaining_transactions if transaction.bank_date < newest_date),
+        key=lambda transaction: (transaction.bank_date, transaction.id),
+        reverse=True,
+    )
+    return {
+        "oldest_date": oldest_date,
+        "newest_date": newest_date,
+        "matched_count": matched_count,
+        "possible_matches": possible_matches,
+        "csv_only": csv_only,
+        "pending": pending,
+        "extra": extra,
+    }
+
+
 def budget_totals(month):
     items = BudgetItem.query.filter_by(month=month).filter(BudgetItem.deleted_at.is_(None)).all()
     credits = sum((Decimal(item.amount) for item in items if item.amount > 0), Decimal("0"))

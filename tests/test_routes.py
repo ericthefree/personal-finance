@@ -443,6 +443,107 @@ def test_duplicate_import_is_discarded(app, client):
     assert b"Duplicate" in response.data
 
 
+def test_reconciliation_reviews_description_differences_then_imports_and_removes(app, client):
+    with app.app_context():
+        exact = Transaction(
+            bank_date=date(2026, 6, 10),
+            budget_month=date(2026, 6, 1),
+            amount=-10,
+            bank_description="Exact Match",
+        )
+        differing = Transaction(
+            bank_date=date(2026, 5, 1),
+            budget_month=date(2026, 5, 1),
+            amount=-5,
+            bank_description="PENDING COFFEE",
+        )
+        extra = Transaction(
+            bank_date=date(2026, 5, 20),
+            budget_month=date(2026, 5, 1),
+            amount=-8,
+            bank_description="Duplicate purchase",
+        )
+        pending = Transaction(
+            bank_date=date(2026, 6, 11),
+            budget_month=date(2026, 6, 1),
+            amount=-7,
+            bank_description="Pending card",
+        )
+        db.session.add_all([exact, differing, extra, pending])
+        db.session.commit()
+        differing_id = differing.id
+        extra_id = extra.id
+        pending_id = pending.id
+
+    csv_data = b"Date,Amount,Description\n5/1/2026,-5,CARD PURCHASE COFFEE\n5/5/2026,-9,Missing import\n6/10/2026,-10, exact   match \n"
+    response = client.post(
+        "/admin/reconcile/preview",
+        data={"csv_file": (io.BytesIO(csv_data), "recent.csv")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    assert b"Description differs" in response.data
+    assert b"PENDING COFFEE" in response.data
+    token = response.request.path.rsplit("/", 1)[-1]
+
+    response = client.post(
+        f"/admin/reconcile/{token}/review",
+        data={"match_0": differing_id},
+        follow_redirects=True,
+    )
+    assert b"Not imported" in response.data
+    assert b"Missing import" in response.data
+    assert b"Pending card" in response.data
+    assert b"Duplicate purchase" in response.data
+    assert b">2</strong>" in response.data
+
+    response = client.post(
+        f"/admin/reconcile/{token}/apply",
+        data={"import_row": "1", "remove_transaction": extra_id},
+        follow_redirects=True,
+    )
+    assert b"imported 1 and removed 1 transaction" in response.data
+    with app.app_context():
+        assert Transaction.query.filter_by(bank_description="Missing import").one().deleted_at is None
+        assert db.session.get(Transaction, extra_id).deleted_at is not None
+        assert db.session.get(Transaction, pending_id).deleted_at is None
+
+
+def test_reconciliation_does_not_allow_pending_transaction_removal(app, client):
+    with app.app_context():
+        pending = Transaction(
+            bank_date=date(2026, 6, 2),
+            budget_month=date(2026, 6, 1),
+            amount=-7,
+            bank_description="Pending card",
+        )
+        db.session.add(pending)
+        db.session.commit()
+        pending_id = pending.id
+
+    response = client.post(
+        "/admin/reconcile/preview",
+        data={
+            "csv_file": (
+                io.BytesIO(b"Date,Amount,Description\n6/1/2026,-1,Only CSV transaction\n"),
+                "recent.csv",
+            )
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    token = response.request.path.rsplit("/", 1)[-1]
+
+    client.post(
+        f"/admin/reconcile/{token}/apply",
+        data={"remove_transaction": pending_id},
+    )
+
+    with app.app_context():
+        assert db.session.get(Transaction, pending_id).deleted_at is None
+
+
 def test_later_import_defaults_to_the_transaction_date_month(app, client):
     with app.app_context():
         db.session.add(

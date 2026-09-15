@@ -20,6 +20,7 @@ from personal_finance.services import (
     monthly_activity,
     monthly_spending,
     parse_csv_upload,
+    reconcile_transactions,
 )
 
 
@@ -79,6 +80,58 @@ def test_csv_limits_invalid_row_report():
     assert "95 more invalid rows" in message
     assert "Row 7:" not in message
     assert len(message) < 1_000
+
+
+def test_reconcile_matches_normalized_descriptions_once_and_classifies_unmatched(app):
+    rows = [
+        {"bank_date": "2026-06-01", "description": "  COFFEE   SHOP ", "amount": "-5.00"},
+        {"bank_date": "2026-06-01", "description": "Coffee Shop", "amount": "-5.00"},
+        {"bank_date": "2026-05-01", "description": "Missing import", "amount": "-9.00"},
+    ]
+    with app.app_context():
+        db.session.add_all(
+            [
+                Transaction(bank_date=date(2026, 6, 1), budget_month=date(2026, 6, 1), amount=-5, bank_description="coffee shop"),
+                Transaction(bank_date=date(2026, 6, 1), budget_month=date(2026, 6, 1), amount=-7, bank_description="Pending card"),
+                Transaction(bank_date=date(2026, 5, 15), budget_month=date(2026, 5, 1), amount=-8, bank_description="Extra copy"),
+            ]
+        )
+        db.session.commit()
+
+        result = reconcile_transactions(rows, Transaction.query.all(), reviewed=True)
+
+        assert result["matched_count"] == 1
+        assert [row["index"] for row in result["csv_only"]] == [1, 2]
+        assert [transaction.bank_description for transaction in result["pending"]] == ["Pending card"]
+        assert [transaction.bank_description for transaction in result["extra"]] == ["Extra copy"]
+
+
+def test_reconcile_offers_and_applies_manual_description_match(app):
+    rows = [
+        {"bank_date": "2026-06-01", "description": "CARD PURCHASE COFFEE", "amount": "-5.00"}
+    ]
+    with app.app_context():
+        transaction = Transaction(
+            bank_date=date(2026, 6, 1),
+            budget_month=date(2026, 6, 1),
+            amount=-5,
+            bank_description="PENDING COFFEE",
+        )
+        db.session.add(transaction)
+        db.session.commit()
+
+        initial = reconcile_transactions(rows, [transaction])
+        reviewed = reconcile_transactions(
+            rows, [transaction], manual_matches={0: transaction.id}, reviewed=True
+        )
+
+        assert initial["matched_count"] == 0
+        assert initial["possible_matches"][0]["candidates"] == [transaction]
+        assert initial["csv_only"] == []
+        assert initial["pending"] == []
+        assert reviewed["matched_count"] == 1
+        assert reviewed["csv_only"] == []
+        assert reviewed["pending"] == []
 
 
 def test_category_tree_is_sorted_alphabetically_without_case_sensitivity(app):

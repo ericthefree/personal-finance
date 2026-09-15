@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Reconciliation report · Personal Finance{% endblock %}
+{% block content %}
+<section class="page-heading"><div><p class="eyebrow">Transaction comparison</p><h1>Reconciliation report</h1><p>{{ filename }} · {{ result.oldest_date|date_us }} through {{ result.newest_date|date_us }}</p></div><a class="button" href="{{ url_for('main.admin') }}">Cancel</a></section>
+<section class="mini-metrics reconciliation-metrics">
+  <div><span>Matched</span><strong>{{ result.matched_count }}</strong></div>
+  <div><span>Possible matches</span><strong>{{ result.possible_matches|length }}</strong></div>
+  <div><span>Not imported</span><strong>{{ result.csv_only|length }}</strong></div>
+  <div><span>Pending</span><strong>{{ result.pending|length }}</strong></div>
+  <div><span>Possible extras</span><strong>{{ result.extra|length }}</strong></div>
+</section>
+
+{% if not reviewed %}
+<section class="panel">
+  <div class="panel-heading"><div><p class="eyebrow">Review required</p><h2>Description differs</h2><p>These transactions have the same date and amount but different descriptions. Choose a DB transaction only when it represents the CSV transaction.</p></div></div>
+  <form action="{{ url_for('main.reconcile_review', token=token) }}" method="post" class="stack-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="table-panel reconcile-table-wrap"><table class="data-table reconcile-table"><thead><tr><th>Date</th><th>CSV description</th><th class="amount-cell">Amount</th><th>Matching DB transaction</th></tr></thead><tbody>
+      {% for possible in result.possible_matches %}<tr><td>{{ possible.row.bank_date }}</td><td>{{ possible.row.description }}</td><td class="amount-cell">{{ possible.row.amount|currency }}</td><td><select name="match_{{ possible.row.index }}" aria-label="DB match for {{ possible.row.description }}"><option value="">Leave unmatched</option>{% for transaction in possible.candidates %}<option value="{{ transaction.id }}">{{ transaction.bank_description }}</option>{% endfor %}</select></td></tr>{% endfor %}
+    </tbody></table></div>
+    <div class="reconcile-actions"><small>Unmatched rows will be classified in the final report.</small><button class="button primary">Apply matches and continue</button></div>
+  </form>
+</section>
+{% else %}
+<form action="{{ url_for('main.reconcile_apply', token=token) }}" method="post" class="stack-form" onsubmit="return confirm('Apply the selected imports and removals?')">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <section class="panel reconcile-section">
+    <div class="panel-heading"><div><p class="eyebrow">Informational</p><h2>Pending</h2><p>Unmatched DB transactions dated on or after {{ result.newest_date|date_us }}. These are not changed by this report.</p></div><span class="status pending">{{ result.pending|length }}</span></div>
+    <div class="table-panel reconcile-table-wrap"><table class="data-table reconcile-table"><thead><tr><th>Date</th><th>DB description</th><th class="amount-cell">Amount</th></tr></thead><tbody>{% for transaction in result.pending %}<tr><td>{{ transaction.bank_date|date_us }}</td><td>{{ transaction.bank_description }}</td><td class="amount-cell">{{ transaction.amount|currency }}</td></tr>{% else %}<tr><td colspan="3" class="empty-state">No pending transactions found.</td></tr>{% endfor %}</tbody></table></div>
+  </section>
+  <section class="panel reconcile-section">
+    <div class="panel-heading"><div><p class="eyebrow">CSV only</p><h2>Not imported</h2><p>Select transactions from the CSV that should be imported.</p></div><span class="status new">{{ result.csv_only|length }}</span></div>
+    <div class="table-panel reconcile-table-wrap"><table class="data-table reconcile-table selectable-table"><thead><tr><th>Import</th><th>Date</th><th>CSV description</th><th class="amount-cell">Amount</th></tr></thead><tbody>{% for row in result.csv_only %}<tr><td><input type="checkbox" name="import_row" value="{{ row.index }}" aria-label="Import {{ row.description }}"></td><td>{{ row.bank_date }}</td><td>{{ row.description }}</td><td class="amount-cell">{{ row.amount|currency }}</td></tr>{% else %}<tr><td colspan="4" class="empty-state">Every CSV transaction has been imported.</td></tr>{% endfor %}</tbody></table></div>
+  </section>
+  <section class="panel reconcile-section">
+    <div class="panel-heading"><div><p class="eyebrow">DB only</p><h2>Possible duplicates or extras</h2><p>Select transactions to remove. Removal is soft-deleted and recorded in the audit history.</p></div><span class="status duplicate">{{ result.extra|length }}</span></div>
+    <div class="table-panel reconcile-table-wrap"><table class="data-table reconcile-table selectable-table"><thead><tr><th>Remove</th><th>Date</th><th>DB description</th><th class="amount-cell">Amount</th></tr></thead><tbody>{% for transaction in result.extra %}<tr><td><input type="checkbox" name="remove_transaction" value="{{ transaction.id }}" aria-label="Remove {{ transaction.bank_description }}"></td><td>{{ transaction.bank_date|date_us }}</td><td>{{ transaction.bank_description }}</td><td class="amount-cell">{{ transaction.amount|currency }}</td></tr>{% else %}<tr><td colspan="4" class="empty-state">No possible duplicate or extra DB transactions found.</td></tr>{% endfor %}</tbody></table></div>
+  </section>
+  <div class="confirm-bar reconcile-confirm"><span>Only selected rows will change.</span><div><a class="button" href="{{ url_for('main.admin') }}">Cancel</a><button class="button primary">Complete reconciliation</button></div></div>
+</form>
+{% endif %}
+{% endblock %}

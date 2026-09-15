@@ -16,6 +16,14 @@
     {% if needs_initial_balance %}<p class="callout">Your initial balance will be requested when you confirm the first import.</p>
     {% else %}<form action="{{ url_for('main.reset_balance') }}" method="post" class="inline-form balance-form mobile-restricted" data-current="{{ current_balance }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label><span>Bank balance</span><input name="balance" inputmode="decimal" required></label><button class="button">Reconcile balance</button></form>{% endif %}
   </article>
+  <article class="panel feature-panel">
+    <div class="feature-icon">✓</div><div><p class="eyebrow">Transactions</p><h2>Reconcile bank CSV</h2><p>Compare a recent bank file with imported transactions. Nothing changes until you review the report.</p></div>
+    <form action="{{ url_for('main.reconcile_preview') }}" method="post" enctype="multipart/form-data" class="stack-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label class="file-drop"><input type="file" name="csv_file" accept=".csv,text/csv" required><span>Choose a CSV file</span><small>Use a file covering at least three months</small></label>
+      <button class="button primary">Compare transactions</button>
+    </form>
+  </article>
 </section>
 <section class="panel">
   <div class="panel-heading"><div><p class="eyebrow">Organization</p><h2>Categories</h2><p>Manage category types, parents, subcategories, and reporting behavior.</p></div><a class="button" href="{{ url_for('main.manage_categories') }}">Manage categories</a></div>

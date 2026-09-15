@@ -70,6 +70,17 @@ Date,Amount,Description,Ref. #
 The complete file is rejected if any transaction row is malformed. Existing transactions with the
 same date, description, and signed amount are shown as duplicates and discarded after confirmation.
 
+## Reconcile transactions
+
+The **Reconcile bank CSV** tool on the Admin page compares a recent bank file with active database
+transactions. Dates and signed amounts must match exactly; descriptions ignore capitalization and
+extra whitespace. Each CSV and database transaction can be matched only once.
+
+Same-date, same-amount rows with different descriptions are shown for manual matching. The final
+report separates pending database transactions, CSV transactions that were not imported, and
+possible duplicate or extra database transactions. Selected CSV rows can be imported and selected
+extras can be soft-deleted; pending rows are informational only.
+
 ## Tests
 
 ```bash
