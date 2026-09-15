@@ -113,12 +113,25 @@ def current_balance():
     checkpoint = BalanceCheckpoint.query.order_by(BalanceCheckpoint.id.desc()).first()
     if not checkpoint:
         return None
-    delta = (
+    active_delta = (
         db.session.query(func.coalesce(func.sum(Transaction.amount), 0))
         .filter(Transaction.id > checkpoint.transaction_cutoff_id, Transaction.deleted_at.is_(None))
         .scalar()
     )
-    return Decimal(checkpoint.balance) + Decimal(delta)
+    deleted_checkpoint_delta = (
+        db.session.query(func.coalesce(func.sum(Transaction.amount), 0))
+        .filter(
+            Transaction.id <= checkpoint.transaction_cutoff_id,
+            Transaction.deleted_at.is_not(None),
+            Transaction.deleted_at >= checkpoint.created_at,
+        )
+        .scalar()
+    )
+    return (
+        Decimal(checkpoint.balance)
+        + Decimal(active_delta)
+        - Decimal(deleted_checkpoint_delta)
+    )
 
 
 def ensure_current_month():

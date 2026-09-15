@@ -664,6 +664,35 @@ def test_transaction_delete_is_soft_delete(app, client):
         assert db.session.get(Transaction, transaction_id).deleted_at is not None
 
 
+def test_deleting_checkpointed_expense_updates_summary_and_cash_flow_balances(app, client):
+    with app.app_context():
+        transaction = Transaction(
+            bank_date=date.today(),
+            budget_month=date.today().replace(day=1),
+            amount=Decimal("-7.56"),
+            bank_description="Manual transaction",
+            custom_description="Temporary expense",
+            source="manual",
+        )
+        db.session.add(transaction)
+        db.session.flush()
+        db.session.add(
+            BalanceCheckpoint(
+                balance=Decimal("92.44"),
+                transaction_cutoff_id=transaction.id,
+            )
+        )
+        db.session.commit()
+        transaction_id = transaction.id
+
+    client.post(f"/transactions/{transaction_id}/delete")
+    summary = client.get("/").data.decode()
+    cash_flow = client.get("/cash-flow").data.decode()
+
+    assert "Checking balance</span><strong>$100.00" in summary
+    assert "Current bank balance</span><strong>$100.00" in cash_flow
+
+
 def test_transaction_amount_can_be_corrected(app, client):
     with app.app_context():
         transaction = Transaction(

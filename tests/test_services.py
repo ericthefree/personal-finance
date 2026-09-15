@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -188,6 +188,52 @@ def test_balance_uses_checkpoint_then_new_signed_transactions(app):
         db.session.commit()
 
         assert current_balance() == Decimal("2150.00")
+
+
+def test_balance_reverses_transaction_deleted_after_latest_checkpoint(app):
+    with app.app_context():
+        transaction = Transaction(
+            bank_date=date.today(),
+            budget_month=month_start(),
+            amount=Decimal("-7.56"),
+            bank_description="Manual transaction",
+        )
+        db.session.add(transaction)
+        db.session.flush()
+        checkpoint = BalanceCheckpoint(
+            balance=Decimal("92.44"),
+            transaction_cutoff_id=transaction.id,
+            created_at=datetime.now(),
+        )
+        db.session.add(checkpoint)
+        db.session.flush()
+        transaction.deleted_at = checkpoint.created_at + timedelta(seconds=1)
+        db.session.commit()
+
+        assert current_balance() == Decimal("100.00")
+
+
+def test_balance_does_not_reverse_transaction_deleted_before_latest_checkpoint(app):
+    with app.app_context():
+        transaction = Transaction(
+            bank_date=date.today(),
+            budget_month=month_start(),
+            amount=Decimal("-7.56"),
+            bank_description="Old deleted transaction",
+            deleted_at=datetime.now(),
+        )
+        db.session.add(transaction)
+        db.session.flush()
+        db.session.add(
+            BalanceCheckpoint(
+                balance=Decimal("100.00"),
+                transaction_cutoff_id=transaction.id,
+                created_at=transaction.deleted_at + timedelta(seconds=1),
+            )
+        )
+        db.session.commit()
+
+        assert current_balance() == Decimal("100.00")
 
 
 def test_available_balance_applies_only_remaining_budget(app):
