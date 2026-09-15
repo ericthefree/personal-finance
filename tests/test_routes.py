@@ -220,6 +220,40 @@ def test_cash_flow_generates_recurring_items_for_next_month(app, client):
         assert item.due_date == next_month.replace(day=3)
 
 
+def test_budget_generates_newly_configured_recurring_item_for_next_month(app, client):
+    current_month = date.today().replace(day=1)
+    next_month = (
+        date(current_month.year + 1, 1, 1)
+        if current_month.month == 12
+        else date(current_month.year, current_month.month + 1, 1)
+    )
+    with app.app_context():
+        transaction = Transaction(
+            bank_date=date.today(),
+            budget_month=current_month,
+            amount=-75,
+            bank_description="New monthly service",
+        )
+        db.session.add(transaction)
+        db.session.commit()
+        transaction_id = transaction.id
+
+    recurring_response = client.post(
+        f"/transactions/{transaction_id}/recurring",
+        data={"enabled": "true", "interval": "1", "create_new": "true"},
+    )
+    next_budget = client.get(f"/budget?month={next_month:%Y-%m}")
+
+    assert recurring_response.status_code == 200
+    assert next_budget.status_code == 200
+    assert b"New monthly service" in next_budget.data
+    with app.app_context():
+        assert BudgetItem.query.filter_by(
+            month=next_month,
+            description="New monthly service",
+        ).one().due_date == next_month.replace(day=date.today().day)
+
+
 def test_cash_flow_period_balances_use_actual_activity_and_independent_chains(app, client):
     month = date(2026, 9, 1)
     with app.app_context():

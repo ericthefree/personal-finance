@@ -913,7 +913,14 @@ def get_splits(transaction_id):
 @bp.route("/budget")
 def budget():
     month = parse_month(request.args.get("month"))
+    current_month = month_start()
     record = MonthRecord.query.filter_by(month=month).first()
+    if current_month <= month <= add_months(current_month, 1) and (not record or not record.closed):
+        if not record:
+            record = MonthRecord(month=month)
+            db.session.add(record)
+        generate_budget_items(month)
+        db.session.commit()
     items = BudgetItem.query.filter_by(month=month).filter(BudgetItem.deleted_at.is_(None)).order_by(
         BudgetItem.due_date
     ).all()
