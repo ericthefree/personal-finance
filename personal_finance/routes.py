@@ -1,3 +1,4 @@
+import calendar
 import csv
 import io
 import json
@@ -999,6 +1000,51 @@ def budget():
         older=older,
         budget_matches=budget_matches,
         history_summaries=history_summaries,
+    )
+
+
+@bp.route("/calendar")
+def budget_calendar():
+    selected_month = parse_month(request.args.get("month"))
+    current_month = month_start()
+    next_month = add_months(current_month, 1)
+    record = MonthRecord.query.filter_by(month=selected_month).first()
+    if current_month <= selected_month <= next_month and (not record or not record.closed):
+        if not record:
+            db.session.add(MonthRecord(month=selected_month))
+        generate_budget_items(selected_month)
+        db.session.commit()
+
+    items = BudgetItem.query.filter_by(month=selected_month).filter(
+        BudgetItem.deleted_at.is_(None)
+    ).order_by(BudgetItem.due_date, BudgetItem.id).all()
+    items_by_date = {}
+    for item in items:
+        items_by_date.setdefault(item.due_date, []).append(item)
+
+    known_months = {
+        month
+        for (month,) in db.session.query(MonthRecord.month).filter(
+            MonthRecord.month <= current_month
+        ).all()
+    }
+    known_months.update(
+        month
+        for (month,) in db.session.query(BudgetItem.month).filter(
+            BudgetItem.month <= current_month,
+            BudgetItem.deleted_at.is_(None),
+        ).all()
+    )
+    known_months.update({current_month, next_month})
+    weeks = calendar.Calendar(firstweekday=6).monthdatescalendar(
+        selected_month.year, selected_month.month
+    )
+    return render_template(
+        "calendar.html",
+        selected_month=selected_month,
+        month_options=sorted(known_months, reverse=True),
+        weeks=weeks,
+        items_by_date=items_by_date,
     )
 
 

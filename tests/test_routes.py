@@ -19,7 +19,7 @@ from personal_finance.models import (
 
 
 def test_main_pages_render(client):
-    for path in ["/", "/cash-flow", "/transactions", "/budget", "/admin"]:
+    for path in ["/", "/cash-flow", "/transactions", "/budget", "/calendar", "/admin"]:
         response = client.get(path)
         assert response.status_code == 200
 
@@ -27,6 +27,75 @@ def test_main_pages_render(client):
     assert b'id="match-amount-range"' in transactions_page
     assert b'id="select-all-matches"' in transactions_page
     assert b'id="deselect-all-matches"' in transactions_page
+
+
+def test_calendar_groups_budget_items_and_offers_past_current_and_next_months(app, client):
+    current_month = date.today().replace(day=1)
+    previous_month = (
+        date(current_month.year - 1, 12, 1)
+        if current_month.month == 1
+        else date(current_month.year, current_month.month - 1, 1)
+    )
+    next_month = (
+        date(current_month.year + 1, 1, 1)
+        if current_month.month == 12
+        else date(current_month.year, current_month.month + 1, 1)
+    )
+    later_month = (
+        date(next_month.year + 1, 1, 1)
+        if next_month.month == 12
+        else date(next_month.year, next_month.month + 1, 1)
+    )
+    with app.app_context():
+        db.session.add_all(
+            [
+                MonthRecord(month=previous_month, closed=True),
+                MonthRecord(month=later_month),
+                BudgetItem(
+                    month=current_month,
+                    due_date=current_month.replace(day=10),
+                    description="Neighborhood electricity utility with a long name",
+                    amount=-125,
+                    transaction_type="Bills",
+                    parent_category="Utilities",
+                    subcategory="Electricity",
+                ),
+                BudgetItem(
+                    month=current_month,
+                    due_date=current_month.replace(day=10),
+                    description="Internet",
+                    amount=-75,
+                    paid=True,
+                    actual_amount=-74,
+                ),
+            ]
+        )
+        db.session.commit()
+
+    response = client.get("/calendar")
+    page = response.data.decode()
+
+    assert response.status_code == 200
+    assert f"{current_month:%B %Y} calendar" in page
+    assert f'<option value="{previous_month:%Y-%m}"' in page
+    assert f'<option value="{current_month:%Y-%m}" selected>' in page
+    assert f'<option value="{next_month:%Y-%m}"' in page
+    assert f'<option value="{later_month:%Y-%m}"' not in page
+    day_cell = re.search(
+        rf'<article class="[^"]*" data-calendar-date="{current_month.replace(day=10).isoformat()}">(.*?)</article>',
+        page,
+        re.S,
+    ).group(1)
+    assert "Neighborhood electricit…" in day_cell
+    assert "Neighborhood electricity utility with a long name" in day_cell
+    assert "Bills · Utilities · Electricity" in day_cell
+    assert "Remaining" in day_cell
+    assert "Internet" in day_cell and "Paid · Actual $74.00" in day_cell
+    assert "color-0" in day_cell and "color-1" in day_cell
+
+    previous_page = client.get(f"/calendar?month={previous_month:%Y-%m}").data.decode()
+    assert f"{previous_month:%B %Y} calendar" in previous_page
+    assert f'<option value="{previous_month:%Y-%m}" selected>' in previous_page
 
 
 def test_cash_flow_splits_budget_periods_and_uses_assigned_month(app, client):

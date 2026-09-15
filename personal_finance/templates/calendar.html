@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Calendar · Personal Finance{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <div><p class="eyebrow">Monthly schedule</p><h1>{{ selected_month.strftime('%B %Y') }} calendar</h1><p>Budget items are shown on their planned due dates. Hover or focus an item for details.</p></div>
+  <form class="month-picker" method="get">
+    <label for="calendar-month">View budget month</label>
+    <select id="calendar-month" name="month" onchange="this.form.submit()">
+      {% for month in month_options %}<option value="{{ month.strftime('%Y-%m') }}" {{ 'selected' if month == selected_month }}>{{ month.strftime('%B %Y') }}</option>{% endfor %}
+    </select>
+  </form>
+</section>
+<p class="calendar-scroll-hint">Scroll horizontally to view all days →</p>
+<section class="calendar-scroll" aria-label="{{ selected_month.strftime('%B %Y') }} budget calendar">
+  <div class="budget-calendar">
+    <div class="calendar-weekdays" aria-hidden="true">{% for weekday in ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] %}<div>{{ weekday }}</div>{% endfor %}</div>
+    <div class="calendar-days">
+      {% for week in weeks %}{% for day in week %}
+      <article class="calendar-day {{ 'outside-month' if day.month != selected_month.month }} {{ 'today' if day == today }}" data-calendar-date="{{ day.isoformat() }}">
+        {% if day.month == selected_month.month %}
+        <span class="calendar-date">{{ day.day }}</span>
+        <div class="calendar-day-items">
+          {% for item in items_by_date.get(day, []) %}
+          {% set tooltip_id = 'calendar-item-' ~ item.id %}
+          <div class="calendar-budget-item color-{{ loop.index0 % 6 }}">
+            <button type="button" aria-describedby="{{ tooltip_id }}">{{ item.description|truncate(24, true, '…') }}</button>
+            <div class="calendar-tooltip" id="{{ tooltip_id }}" role="tooltip">
+              <strong>{{ item.description }}</strong>
+              <span>{{ item.due_date|date_us }} · {{ item.amount|currency }}</span>
+              <span>{{ item.transaction_type or 'Uncategorized' }}{% if item.parent_category %} · {{ item.parent_category }}{% endif %}{% if item.subcategory %} · {{ item.subcategory }}{% endif %}</span>
+              <span>{{ 'Paid' if item.paid else 'Remaining' }}{% if item.actual_amount is not none %} · Actual {{ item.actual_amount|currency }}{% endif %}</span>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </article>
+      {% endfor %}{% endfor %}
+    </div>
+  </div>
+</section>
+{% endblock %}

@@ -82,6 +82,12 @@ report separates pending database transactions, CSV transactions that were not i
 possible duplicate or extra database transactions. Selected CSV rows can be imported and selected
 extras can be soft-deleted; pending rows are informational only.
 
+## Budget calendar
+
+The **Calendar** tab shows budget items on their planned due dates for the current month, prior
+budget months, or the next month. Item labels are shortened to fit each day; hover or keyboard-focus
+an item to see its full description, amount, category, and payment status.
+
 ## Tests
 
 ```bash
