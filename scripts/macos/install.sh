@@ -8,6 +8,8 @@ launch_agents_dir="$HOME/Library/LaunchAgents"
 plist_path="$launch_agents_dir/$label.plist"
 app_path="$HOME/Applications/Personal Finance.app"
 log_dir="$HOME/Library/Logs/Personal Finance"
+app_plist_source="$repo_root/scripts/macos/app-info.plist"
+app_icon_source="$repo_root/scripts/macos/resources/PersonalFinance.icns"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
     printf '%s\n' "This installer must be run on macOS." >&2
@@ -32,7 +34,8 @@ fi
 "$repo_root/.venv/bin/python" -m pip install --quiet --disable-pip-version-check \
     -r "$repo_root/requirements.txt"
 
-mkdir -p "$launch_agents_dir" "$log_dir" "$app_path/Contents/MacOS"
+rm -rf "$app_path"
+mkdir -p "$launch_agents_dir" "$log_dir" "$app_path/Contents/MacOS" "$app_path/Contents/Resources"
 
 PLIST_PATH="$plist_path" REPO_ROOT="$repo_root" LOG_DIR="$log_dir" python3 <<'PY'
 import os
@@ -59,25 +62,9 @@ with open(os.environ["PLIST_PATH"], "wb") as plist:
     plistlib.dump(configuration, plist)
 PY
 
-APP_PLIST="$app_path/Contents/Info.plist" python3 <<'PY'
-import os
-import plistlib
-
-configuration = {
-    "CFBundleDevelopmentRegion": "en",
-    "CFBundleDisplayName": "Personal Finance",
-    "CFBundleExecutable": "Personal Finance",
-    "CFBundleIdentifier": "com.personal-finance.launcher",
-    "CFBundleInfoDictionaryVersion": "6.0",
-    "CFBundleName": "Personal Finance",
-    "CFBundlePackageType": "APPL",
-    "CFBundleShortVersionString": "1.0",
-    "LSMinimumSystemVersion": "11.0",
-}
-
-with open(os.environ["APP_PLIST"], "wb") as plist:
-    plistlib.dump(configuration, plist)
-PY
+cp "$app_plist_source" "$app_path/Contents/Info.plist"
+cp "$app_icon_source" "$app_path/Contents/Resources/PersonalFinance.icns"
+printf 'APPL????' > "$app_path/Contents/PkgInfo"
 
 cat > "$app_path/Contents/MacOS/Personal Finance" <<'SH'
 #!/bin/zsh

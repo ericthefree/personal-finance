@@ -35,7 +35,8 @@ The installer creates **Personal Finance.app** in the current user's `Applicatio
 macOS `launchd` service. The service starts automatically when that user logs in, keeps running
 while the screen is locked, and restarts if it exits unexpectedly. After restarting the Mac, it
 will be available again as soon as the user logs in. Opening the application starts the service if
-necessary and opens `http://127.0.0.1:5000` in the default browser.
+necessary and opens `http://127.0.0.1:5000` in the default browser. Rerunning the installer replaces
+the launcher bundle so its metadata and application icon stay current without changing the database.
 
 The application remains tied to this project folder because the database is stored here. If this
 folder is moved, rerun the installer from its new location. Logs are written to
