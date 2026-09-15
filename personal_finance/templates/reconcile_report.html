@@ -4,6 +4,7 @@
 <section class="page-heading"><div><p class="eyebrow">Transaction comparison</p><h1>Reconciliation report</h1><p>{{ filename }} · {{ result.oldest_date|date_us }} through {{ result.newest_date|date_us }}</p></div><a class="button" href="{{ url_for('main.admin') }}">Cancel</a></section>
 <section class="mini-metrics reconciliation-metrics">
   <div><span>Matched</span><strong>{{ result.matched_count }}</strong></div>
+  <div><span>CSV duplicates ignored</span><strong>{{ result.ignored_duplicate_count }}</strong></div>
   <div><span>Possible matches</span><strong>{{ result.possible_matches|length }}</strong></div>
   <div><span>Not imported</span><strong>{{ result.csv_only|length }}</strong></div>
   <div><span>Pending</span><strong>{{ result.pending|length }}</strong></div>

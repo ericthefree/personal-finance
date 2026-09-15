@@ -134,6 +134,30 @@ def test_reconcile_offers_and_applies_manual_description_match(app):
         assert reviewed["pending"] == []
 
 
+def test_reconcile_ignores_rows_the_importer_identified_as_in_file_duplicates(app):
+    rows = [
+        {"bank_date": "2026-06-15", "description": "PAYPAL PURCHASE", "amount": "-29.53", "duplicate_in_file": False},
+        {"bank_date": "2026-06-15", "description": "PAYPAL PURCHASE", "amount": "-29.53", "duplicate_in_file": True},
+    ]
+    with app.app_context():
+        transaction = Transaction(
+            bank_date=date(2026, 6, 15),
+            budget_month=date(2026, 6, 1),
+            amount=Decimal("-29.53"),
+            bank_description="PAYPAL PURCHASE",
+        )
+        db.session.add(transaction)
+        db.session.commit()
+
+        result = reconcile_transactions(rows, [transaction], reviewed=True)
+
+        assert result["matched_count"] == 1
+        assert result["ignored_duplicate_count"] == 1
+        assert result["csv_only"] == []
+        assert result["pending"] == []
+        assert result["extra"] == []
+
+
 def test_category_tree_is_sorted_alphabetically_without_case_sensitivity(app):
     with app.app_context():
         db.session.add_all(

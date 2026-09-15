@@ -295,10 +295,14 @@ def reconcile_transactions(rows, transactions, manual_matches=None, reviewed=Fal
         for transaction in transactions
         if transaction.deleted_at is None and transaction.bank_date >= oldest_date
     }
-    unmatched_rows = set(range(len(rows)))
+    ignored_duplicate_count = sum(bool(row.get("duplicate_in_file")) for row in rows)
+    unmatched_rows = {
+        index for index, row in enumerate(rows) if not row.get("duplicate_in_file", False)
+    }
     matched_count = 0
 
-    for index, row in enumerate(rows):
+    for index in sorted(unmatched_rows.copy()):
+        row = rows[index]
         row_key = (
             date.fromisoformat(row["bank_date"]),
             Decimal(row["amount"]),
@@ -375,6 +379,7 @@ def reconcile_transactions(rows, transactions, manual_matches=None, reviewed=Fal
         "oldest_date": oldest_date,
         "newest_date": newest_date,
         "matched_count": matched_count,
+        "ignored_duplicate_count": ignored_duplicate_count,
         "possible_matches": possible_matches,
         "csv_only": csv_only,
         "pending": pending,
