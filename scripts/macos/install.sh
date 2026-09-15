@@ -28,6 +28,20 @@ fi
 
 printf '%s\n' "Installing Personal Finance from $repo_root"
 
+launchctl bootout "$service_target" >/dev/null 2>&1 || true
+for attempt in {1..20}; do
+    if ! lsof -nP -iTCP:5050 -sTCP:LISTEN >/dev/null 2>&1; then
+        break
+    fi
+    sleep 0.25
+done
+if lsof -nP -iTCP:5050 -sTCP:LISTEN >/dev/null 2>&1; then
+    printf '%s\n' "Port 5050 is still in use by another process:" >&2
+    lsof -nP -iTCP:5050 -sTCP:LISTEN >&2
+    printf '%s\n' "Stop that process, then rerun this installer." >&2
+    exit 1
+fi
+
 if [[ ! -x "$repo_root/.venv/bin/python" ]]; then
     python3 -m venv "$repo_root/.venv"
 fi
@@ -45,7 +59,7 @@ configuration = {
     "Label": "com.personal-finance.web",
     "ProgramArguments": [
         os.path.join(os.environ["REPO_ROOT"], ".venv/bin/waitress-serve"),
-        "--listen=0.0.0.0:5000",
+        "--listen=0.0.0.0:5050",
         "run:app",
     ],
     "WorkingDirectory": os.environ["REPO_ROOT"],
@@ -73,8 +87,8 @@ service="gui/$(id -u)/com.personal-finance.web"
 launchctl kickstart "$service" >/dev/null 2>&1 || true
 
 for attempt in {1..30}; do
-    if curl --silent --fail --max-time 1 http://127.0.0.1:5000/ >/dev/null; then
-        open http://127.0.0.1:5000/
+    if curl --silent --fail --max-time 1 http://127.0.0.1:5050/ >/dev/null; then
+        open http://127.0.0.1:5050/
         exit 0
     fi
     sleep 1
@@ -85,18 +99,17 @@ exit 1
 SH
 chmod 755 "$app_path/Contents/MacOS/Personal Finance"
 
-launchctl bootout "$service_target" >/dev/null 2>&1 || true
 launchctl bootstrap "gui/$(id -u)" "$plist_path"
 launchctl enable "$service_target"
 launchctl kickstart "$service_target"
 
 for attempt in {1..30}; do
-    if curl --silent --fail --max-time 1 http://127.0.0.1:5000/ >/dev/null; then
+    if curl --silent --fail --max-time 1 http://127.0.0.1:5050/ >/dev/null; then
         printf '\n%s\n' "Personal Finance is installed and running."
-        printf '%s\n' "Open it from $app_path or visit http://127.0.0.1:5000."
+        printf '%s\n' "Open it from $app_path or visit http://127.0.0.1:5050."
         local_hostname="$(scutil --get LocalHostName 2>/dev/null || hostname -s)"
         if [[ -n "$local_hostname" ]]; then
-            printf '%s\n' "On your trusted Wi-Fi, open http://$local_hostname.local:5000 from your phone."
+            printf '%s\n' "On your trusted Wi-Fi, open http://$local_hostname.local:5050 from your phone."
         fi
         open "$app_path"
         exit 0

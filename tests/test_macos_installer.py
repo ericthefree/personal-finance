@@ -33,5 +33,16 @@ def test_installer_copies_complete_launcher_bundle_resources():
 def test_installed_service_listens_on_the_trusted_local_network():
     installer = (MACOS_SCRIPTS / "install.sh").read_text(encoding="utf-8")
 
-    assert '"--listen=0.0.0.0:5000"' in installer
-    assert "http://$local_hostname.local:5000" in installer
+    assert '"--listen=0.0.0.0:5050"' in installer
+    assert "http://$local_hostname.local:5050" in installer
+
+
+def test_installer_stops_existing_service_and_reports_other_port_owner():
+    installer = (MACOS_SCRIPTS / "install.sh").read_text(encoding="utf-8")
+
+    bootout = 'launchctl bootout "$service_target"'
+    bootstrap = 'launchctl bootstrap "gui/$(id -u)" "$plist_path"'
+    assert installer.count(bootout) == 1
+    assert installer.index(bootout) < installer.index(bootstrap)
+    assert 'lsof -nP -iTCP:5050 -sTCP:LISTEN' in installer
+    assert "Port 5050 is still in use by another process" in installer

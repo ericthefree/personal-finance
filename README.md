@@ -10,17 +10,17 @@ Requires Python 3.11 or later.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/flask --app run:app run --debug
+.venv/bin/flask --app run:app run --debug --port 5050
 ```
 
-Open `http://127.0.0.1:5000` on the host machine. To access the application from another device on
+Open `http://127.0.0.1:5050` on the host machine. To access the application from another device on
 your trusted home network, run the production server:
 
 ```bash
-.venv/bin/waitress-serve --listen=0.0.0.0:5000 run:app
+.venv/bin/waitress-serve --listen=0.0.0.0:5050 run:app
 ```
 
-Then open `http://<local-machine-ip>:5000` from the other device. The application has no
+Then open `http://<local-machine-ip>:5050` from the other device. The application has no
 authentication and should not be exposed directly to the public internet.
 
 ## Install as a macOS application
@@ -35,15 +35,25 @@ The installer creates **Personal Finance.app** in the current user's `Applicatio
 macOS `launchd` service. The service starts automatically when that user logs in, keeps running
 while the screen is locked, and restarts if it exits unexpectedly. After restarting the Mac, it
 will be available again as soon as the user logs in. Opening the application starts the service if
-necessary and opens `http://127.0.0.1:5000` in the default browser. Rerunning the installer replaces
+necessary and opens `http://127.0.0.1:5050` in the default browser. Rerunning the installer replaces
 the launcher bundle so its metadata and application icon stay current without changing the database.
 
 The installed service also accepts connections from devices on the same trusted local network. The
-installer prints the phone-friendly URL, normally `http://<mac-name>.local:5000`. On iPhone, open
+installer prints the phone-friendly URL, normally `http://<mac-name>.local:5050`. On iPhone, open
 that URL in Safari and choose **Share → Add to Home Screen**. On Android, open it in Chrome and
 choose **Add to Home screen**. The Mac must be awake and connected, and macOS may ask permission for
 incoming network connections. The app has no authentication; do not port-forward it or otherwise
 expose it directly to the internet.
+
+If installation reports that port 5050 is already in use, inspect the listener before stopping it:
+
+```bash
+lsof -nP -iTCP:5050 -sTCP:LISTEN
+```
+
+The installer stops its own existing launchd service and waits for that listener to exit. If a
+different process still owns the port, it prints the process details and exits without starting a
+restart loop.
 
 The application remains tied to this project folder because the database is stored here. If this
 folder is moved, rerun the installer from its new location. Logs are written to
