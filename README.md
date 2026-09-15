@@ -13,15 +13,16 @@ python3 -m venv .venv
 .venv/bin/flask --app run:app run --debug --port 5050
 ```
 
-Open `http://127.0.0.1:5050` on the host machine. To access the application from another device on
-your trusted home network, run the production server:
+Open `http://127.0.0.1:5050` on the host machine. For remote access, install and connect Tailscale,
+then bind the production server only to localhost and the computer's Tailscale address:
 
 ```bash
-.venv/bin/waitress-serve --listen=0.0.0.0:5050 run:app
+tailscale_ip="$(tailscale ip -4)"
+.venv/bin/waitress-serve --listen=127.0.0.1:5050 --listen="$tailscale_ip:5050" run:app
 ```
 
-Then open `http://<local-machine-ip>:5050` from the other device. The application has no
-authentication and should not be exposed directly to the public internet.
+Then open `http://<tailscale-ip>:5050` from another device signed into the same Tailscale network.
+The application has no authentication and should not be exposed directly to the public internet.
 
 ## Install as a macOS application
 
@@ -31,6 +32,11 @@ On the Mac that will store the finance data, run:
 ./scripts/macos/install.sh
 ```
 
+The installer requires the Tailscale app to be installed, signed in, and connected on the Mac.
+Install Tailscale on the phone and sign into the same Tailscale account as well. Bitdefender VPN and
+Tailscale may conflict when active at the same time; disconnect Bitdefender while using Tailscale if
+the phone or Mac cannot connect.
+
 The installer creates **Personal Finance.app** in the current user's `Applications` folder and a
 macOS `launchd` service. The service starts automatically when that user logs in, keeps running
 while the screen is locked, and restarts if it exits unexpectedly. After restarting the Mac, it
@@ -38,12 +44,11 @@ will be available again as soon as the user logs in. Opening the application sta
 necessary and opens `http://127.0.0.1:5050` in the default browser. Rerunning the installer replaces
 the launcher bundle so its metadata and application icon stay current without changing the database.
 
-The installed service also accepts connections from devices on the same trusted local network. The
-installer prints the phone-friendly URL, normally `http://<mac-name>.local:5050`. On iPhone, open
-that URL in Safari and choose **Share → Add to Home Screen**. On Android, open it in Chrome and
-choose **Add to Home screen**. The Mac must be awake and connected, and macOS may ask permission for
-incoming network connections. The app has no authentication; do not port-forward it or otherwise
-expose it directly to the internet.
+The installed service accepts connections only from the Mac itself and the Mac's private Tailscale
+address. The installer prints the Tailscale URL. On iPhone, open that URL in Safari and choose
+**Share → Add to Home Screen**. On Android, open it in Chrome and choose **Add to Home screen**. The
+Mac must be awake with Tailscale connected. Do not port-forward the service or otherwise expose it
+directly to the internet.
 
 If installation reports that port 5050 is already in use, inspect the listener before stopping it:
 

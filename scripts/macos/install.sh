@@ -26,6 +26,21 @@ if ! python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 11))'; then
     exit 1
 fi
 
+tailscale_bin="$(command -v tailscale || true)"
+if [[ -z "$tailscale_bin" && -x "/Applications/Tailscale.app/Contents/MacOS/Tailscale" ]]; then
+    tailscale_bin="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+fi
+if [[ -z "$tailscale_bin" ]]; then
+    printf '%s\n' "Install Tailscale on this Mac, sign in, and rerun this installer." >&2
+    exit 1
+fi
+
+tailscale_ip="$("$tailscale_bin" ip -4 2>/dev/null | head -n 1)"
+if [[ ! "$tailscale_ip" =~ ^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+    printf '%s\n' "Tailscale is not connected. Connect it on this Mac, then rerun this installer." >&2
+    exit 1
+fi
+
 printf '%s\n' "Installing Personal Finance from $repo_root"
 
 launchctl bootout "$service_target" >/dev/null 2>&1 || true
@@ -51,7 +66,8 @@ fi
 rm -rf "$app_path"
 mkdir -p "$launch_agents_dir" "$log_dir" "$app_path/Contents/MacOS" "$app_path/Contents/Resources"
 
-PLIST_PATH="$plist_path" REPO_ROOT="$repo_root" LOG_DIR="$log_dir" python3 <<'PY'
+PLIST_PATH="$plist_path" REPO_ROOT="$repo_root" LOG_DIR="$log_dir" \
+    TAILSCALE_IP="$tailscale_ip" python3 <<'PY'
 import os
 import plistlib
 
@@ -59,7 +75,8 @@ configuration = {
     "Label": "com.personal-finance.web",
     "ProgramArguments": [
         os.path.join(os.environ["REPO_ROOT"], ".venv/bin/waitress-serve"),
-        "--listen=0.0.0.0:5050",
+        "--listen=127.0.0.1:5050",
+        f"--listen={os.environ['TAILSCALE_IP']}:5050",
         "run:app",
     ],
     "WorkingDirectory": os.environ["REPO_ROOT"],
@@ -107,10 +124,7 @@ for attempt in {1..30}; do
     if curl --silent --fail --max-time 1 http://127.0.0.1:5050/ >/dev/null; then
         printf '\n%s\n' "Personal Finance is installed and running."
         printf '%s\n' "Open it from $app_path or visit http://127.0.0.1:5050."
-        local_hostname="$(scutil --get LocalHostName 2>/dev/null || hostname -s)"
-        if [[ -n "$local_hostname" ]]; then
-            printf '%s\n' "On your trusted Wi-Fi, open http://$local_hostname.local:5050 from your phone."
-        fi
+        printf '%s\n' "On a device in your Tailscale network, open http://$tailscale_ip:5050."
         open "$app_path"
         exit 0
     fi

@@ -30,11 +30,22 @@ def test_installer_copies_complete_launcher_bundle_resources():
     assert 'cat > "$app_path/Contents/MacOS/Personal Finance"' in installer
 
 
-def test_installed_service_listens_on_the_trusted_local_network():
+def test_installed_service_listens_only_locally_and_on_tailscale():
     installer = (MACOS_SCRIPTS / "install.sh").read_text(encoding="utf-8")
 
-    assert '"--listen=0.0.0.0:5050"' in installer
-    assert "http://$local_hostname.local:5050" in installer
+    assert '"--listen=127.0.0.1:5050"' in installer
+    assert 'f"--listen={os.environ[\'TAILSCALE_IP\']}:5050"' in installer
+    assert '"--listen=0.0.0.0:5050"' not in installer
+    assert "http://$tailscale_ip:5050" in installer
+
+
+def test_installer_requires_a_connected_tailscale_client():
+    installer = (MACOS_SCRIPTS / "install.sh").read_text(encoding="utf-8")
+
+    assert 'command -v tailscale' in installer
+    assert '"$tailscale_bin" ip -4' in installer
+    assert "Install Tailscale on this Mac" in installer
+    assert "Tailscale is not connected" in installer
 
 
 def test_installer_stops_existing_service_and_reports_other_port_owner():
